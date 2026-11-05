@@ -1,0 +1,13 @@
+{
+  "_note": "Every image the Dockerfile pins, with the time its manifest was pushed (Docker Hub tag_last_pushed) and when it was pinned. A pin may only move to a manifest at least 72 hours old; test/deployment.test.js checks this file against the Dockerfile.",
+  "node:24.22.1-bookworm-slim": {
+    "digest": "sha256:be8204d4bd327363357f532187b752ff62759c31bedf98e9e18fc08c9cbd605c",
+    "pushedAt": "2026-10-28T05:40:27Z",
+    "pinnedAt": "2026-11-05T18:00:00Z"
+  },
+  "ubuntu:noble-20260905": {
+    "digest": "sha256:a053cbffda9d424679c103c5b4f452297efc3774a1e491c110289f726fbb5d34",
+    "pushedAt": "2026-09-09T17:54:57Z",
+    "pinnedAt": "2026-11-05T18:00:00Z"
+  }
+}

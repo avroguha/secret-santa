@@ -1,0 +1,39 @@
+# runtime state and anything private - anchored, so a source folder of the same
+# name deeper down is never silently left out of a clone or an image
+/node_modules/
+/data/
+/tls/
+/secrets/
+/certs/*.crt
+/certs/*.pem
+*.key
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.log
+/.claude/
+# the publishing standard set, anchored (an unanchored dir/ would match at any depth)
+/.venv/
+/venv/
+/__pycache__/
+/.pytest_cache/
+/.mypy_cache/
+/.next/
+/.turbo/
+/coverage/
+*.pyc
+.DS_Store
+Thumbs.db
+desktop.ini
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.p12
+*.pfx
+*.kdbx
+id_rsa*
+id_ed25519*
+*.sqlite3
+*.db

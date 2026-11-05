@@ -1,0 +1,12 @@
+# Never part of an image: dependencies are installed inside the build, and
+# data, certificates and secrets are bind-mounted at runtime.
+node_modules
+data
+tls
+secrets
+test
+.git
+.claude
+*.log
+*.sqlite
+*.sqlite-*

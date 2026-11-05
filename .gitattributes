@@ -1,0 +1,11 @@
+# every text file is stored and checked out with LF; fonts are binary
+* text=auto eol=lf
+*.woff2 binary
+
+# keep shell scripts, the Dockerfile and the env files LF: a CRLF entrypoint
+# fails with "bad interpreter" on Linux
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.env text eol=lf

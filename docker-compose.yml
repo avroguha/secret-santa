@@ -1,0 +1,78 @@
+# Secret Santa - one command per place, each with its own committed env file:
+#
+#   work:     docker compose --env-file work.env up --build -d
+#   home lab: docker compose --env-file home.env up --build -d
+#
+# No site's locations are written here. Every location is REQUIRED (${VAR?...}):
+# a missing env file stops compose with a message instead of silently building
+# against the wrong registry. An explicitly EMPTY value is allowed and means
+# "off" (no registry prefix, Ubuntu's own mirrors, no proxy).
+#
+# Host networking (the app listens on SANTA_PORT on the host itself), bind
+# mounts for the data, no secrets in this file or in the env files: the Azure
+# client secret is a file in SANTA_SECRETS_DIR.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  secret-santa:
+    build:
+      context: .
+      args:
+        IMAGE_REGISTRY: ${IMAGE_REGISTRY?set it in the env file - work.env or home.env}
+        APT_MIRROR: ${APT_MIRROR?set it in the env file - work.env or home.env}
+        NPM_REGISTRY: ${NPM_REGISTRY?set it in the env file - work.env or home.env}
+        # Empty unless given in the shell for one command: NPM_TOKEN=... docker compose ...
+        NPM_TOKEN: ${NPM_TOKEN-}
+        HTTP_PROXY: ${HTTP_PROXY?set it in the env file (empty = no proxy)}
+        HTTPS_PROXY: ${HTTPS_PROXY?set it in the env file (empty = no proxy)}
+        NO_PROXY: ${NO_PROXY?set it in the env file}
+    image: secret-santa:local
+    # Built here, never pulled: a pull of "secret-santa:local" would go to Docker Hub.
+    pull_policy: build
+    container_name: secret-santa
+    network_mode: host
+    restart: unless-stopped
+    logging: *logging
+    # The entrypoint starts as root only to fix bind-mount ownership and make a
+    # self-signed certificate, then drops to an unprivileged user (setpriv).
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - FOWNER
+      - DAC_OVERRIDE
+      - SETUID
+      - SETGID
+    environment:
+      SANTA_PORT: ${SANTA_PORT?set it in the env file}
+      SANTA_BIND: ${SANTA_BIND?set it in the env file}
+      SANTA_BASE_URL: ${SANTA_BASE_URL?set it in the env file (the address people type, e.g. https://santa.example.com:8443)}
+      # true = demo data (its own database, every sign-in code is SANTA_DEMO_OTP, no email sent)
+      # false = real data only; no demo record is ever visible.
+      SANTA_DEMO_MODE: ${SANTA_DEMO_MODE?set it in the env file - true for the demo, false for real data}
+      SANTA_DEMO_OTP: ${SANTA_DEMO_OTP?set it in the env file}
+      SANTA_TRUST_PROXY: ${SANTA_TRUST_PROXY?set it in the env file}
+      SANTA_TLS_SELF_SIGNED: ${SANTA_TLS_SELF_SIGNED?set it in the env file}
+      SANTA_TLS_HOSTNAME: ${SANTA_TLS_HOSTNAME?set it in the env file (may be empty)}
+      SANTA_AZURE_TENANT_ID: ${SANTA_AZURE_TENANT_ID?set it in the env file (empty = Microsoft sign-in off)}
+      SANTA_AZURE_CLIENT_ID: ${SANTA_AZURE_CLIENT_ID?set it in the env file (empty = Microsoft sign-in off)}
+      SANTA_AZURE_CLIENT_SECRET_FILE: /secrets/azure_client_secret
+      TZ: ${TZ?set it in the env file, e.g. Asia/Kolkata}
+      # Runtime proxy: only Microsoft sign-in leaves the network. Uppercase only;
+      # the mail relay is a direct SMTP connection and never uses it.
+      HTTPS_PROXY: ${RUNTIME_HTTPS_PROXY?set it in the env file (empty = no proxy)}
+      NO_PROXY: ${NO_PROXY?set it in the env file}
+    volumes:
+      # ":z" relabels for SELinux hosts and is ignored everywhere else.
+      - ${SANTA_DATA_DIR?set it in the env file}:/data:z
+      - ${SANTA_TLS_DIR?set it in the env file}:/certs:z
+      - ${SANTA_SECRETS_DIR?set it in the env file}:/secrets:ro,z
