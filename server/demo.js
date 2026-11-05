@@ -97,7 +97,7 @@ function seed(app, { reset = false } = {}) {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, name, f.description, f.start, f.end, f.budget, f.scope || 'location', 3, f.reveal || 'after_end', f.revealed ? 1 : 0, f.joinOpen ? 1 : 0,
     f.checkIn || null, '3,1', f.guidelines || '', uid[f.owner], f.code, f.ownerPlays ? at : null, at, at).lastInsertRowid;
     // checkedIn: everyone has confirmed their location (games past phase 1).
-    const join = (teamId, names, checkedIn = true) => names.forEach((n) => db.run('INSERT INTO team_members (team_id, user_id, location_confirmed_at, joined_at) VALUES (?, ?, ?, ?)', teamId, uid[n], checkedIn ? at : null, at));
+    const join = (teamId, names, checkedIn = true) => names.forEach((n) => db.run('INSERT INTO team_members (team_id, user_id, location_confirmed_at, accepted_at, joined_at) VALUES (?, ?, ?, ?, ?)', teamId, uid[n], checkedIn ? at : null, checkedIn ? at : null, at));
     // Two people who asked for a quiet inbox.
     for (const n of ['Rudy Rednose', 'Frost Snowden']) db.run('UPDATE users SET dnd = 1 WHERE id = ?', uid[n]);
 
@@ -146,7 +146,7 @@ function seed(app, { reset = false } = {}) {
       'Frost Snowden', 'Star Bright', 'Comet Starling', 'Mistle Toe'], false);
     // Phase 1 in progress: some have checked in, one is sitting this one out.
     for (const n of ['Holly Berry', 'Jack Frost', 'Noelle Winters', 'Tinsel Taylor', 'Ginger Snap', 'Frost Snowden']) {
-      db.run('UPDATE team_members SET location_confirmed_at = ? WHERE team_id = ? AND user_id = ?', at, setup, uid[n]);
+      db.run('UPDATE team_members SET location_confirmed_at = ?, accepted_at = ? WHERE team_id = ? AND user_id = ?', at, at, setup, uid[n]);
     }
     db.run('UPDATE team_members SET opted_out = 1, opted_out_at = ? WHERE team_id = ? AND user_id = ?', at, setup, uid['Dasher Dunn']);
 

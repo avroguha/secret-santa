@@ -1,6 +1,6 @@
 // Home: create a game or join one, then the games you play in and the games
 // you organise, plus a short to-do list.
-import { api, html, mount, actions, fmtDate, fmtShort, phaseBadge, plural, toast, formModal } from '../lib.js';
+import { api, html, mount, actions, fmtDate, fmtShort, phaseBadge, plural, toast, formModal, secretName } from '../lib.js';
 import { createGameFlow } from './manage.js';
 import { askForCode } from './join.js';
 
@@ -35,25 +35,26 @@ function teamCard(t) {
   } else if (t.phase === 'setup') {
     middle = html`<p class="muted" style="margin:0">✅ You're checked in. Names have not been drawn yet - polish your wishlist while you wait!</p>`;
   } else if (t.childName) {
-    middle = html`<div class="gift-tag"><div class="label">You are Secret Santa for</div><div class="value">${t.childName}</div></div>`;
+    middle = html`<div class="gift-tag"><div class="label">You are Secret Santa for</div><div class="value">${t.revealed ? t.childName : secretName(t.childName)}</div></div>`;
   } else {
     middle = html`<p class="muted" style="margin:0">You are not in the circle yet - the organiser will slot you in.</p>`;
   }
   return html`
-    <a class="card ribbon" href="#/team/${t.id}${t.needsCheckIn || t.optedOut ? '/team' : ''}">
+    <div class="card ribbon link-card">
       <div class="card-body">
-        <div class="row between"><h3 style="margin:0">${t.name}</h3>${phaseBadge(t.phase)}</div>
+        <div class="row between"><h3 style="margin:0"><a class="stretch" href="#/team/${t.id}${t.needsCheckIn || t.optedOut ? '/team' : ''}">${t.name}</a></h3>${phaseBadge(t.phase)}</div>
         <p class="muted" style="margin:0">📅 ${fmtShort(t.startDate)} - ${fmtDate(t.endDate)}${t.budget ? html` · 💰 ${t.budget}` : ''}</p>
         ${middle}
         ${t.santaName ? html`<div class="alert gold" style="margin:0"><span class="ico">🎉</span><div>Your Secret Santa was <b>${t.santaName}</b>!</div></div>` : ''}
         <div class="row" style="margin-top:auto">
           <span class="badge">👥 ${plural(t.memberCount, 'player')}</span>
           ${t.isOwner ? html`<span class="badge gold">🧝 you organise</span>` : ''}
+          ${!t.saidYes && !t.optedOut && !t.needsCheckIn && t.phase !== 'ended' ? html`<span class="badge warn">🙋 say yes</span>` : ''}
           ${t.unread ? html`<span class="badge red">💌 ${plural(t.unread, 'new note')}</span>` : ''}
           ${t.openTasks ? html`<span class="badge warn">🧝 ${plural(t.openTasks, 'task')} for you</span>` : ''}
         </div>
       </div>
-    </a>`;
+    </div>`;
 }
 
 function organiserCard(g) {
@@ -78,6 +79,9 @@ export async function homeView(main, { session, isCurrent, refresh }) {
   const nudges = [];
   for (const t of mine.teams.filter((x) => x.needsCheckIn)) {
     nudges.push(html`<li>📍 <a href="#/team/${t.id}/team">Check in for ${t.name}</a> - just tell us where you're playing from${t.locationDeadline ? ` (any time before ${fmtShort(t.locationDeadline)})` : ''}.</li>`);
+  }
+  for (const t of mine.teams.filter((x) => !x.saidYes && !x.optedOut && !x.needsCheckIn && x.phase !== 'ended')) {
+    nudges.push(html`<li>🙋 <a href="#/team/${t.id}/team">Say yes to ${t.name}</a> - your Santa sees your wishlist and hints only once you do.</li>`);
   }
   if (!wishes.length) nudges.push(html`<li>🎁 Your wishlist is empty - <a href="#/wishlist">add a few wishes</a> so your Santa has ideas.</li>`);
   if (!me.locationId) nudges.push(html`<li>📍 You haven't said where you usually play from - <a href="#/profile">pick your location</a>.</li>`);

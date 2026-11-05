@@ -32,6 +32,9 @@ function create(app) {
     const a = settings();
     const missing = [];
     if (!a.tenantId) missing.push('SANTA_AZURE_TENANT_ID');
+    // "common" / "organizations" / "consumers" would let any Microsoft tenant's
+    // accounts in, and an email claim from a stranger's tenant proves nothing.
+    else if (/^(common|organizations|consumers)$/i.test(a.tenantId)) missing.push('SANTA_AZURE_TENANT_ID (your own tenant id - not common, organizations or consumers)');
     if (!a.clientId) missing.push('SANTA_AZURE_CLIENT_ID');
     if (!secret()) missing.push(`client secret file (${a.secretFile})`);
     return {

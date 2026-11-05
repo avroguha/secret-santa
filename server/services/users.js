@@ -97,6 +97,8 @@ function plan(db, csvText, { createLocations = true } = {}) {
             || (r.location && (!loc || loc.id !== existing.location_id))
             || !existing.active;
           r.action = changed ? 'update' : 'unchanged';
+          const secret = (existing.email || '') !== r.email ? T.secretGames(db, existing.id) : [];
+          if (secret.length) r.errors.push(`${existing.username} is in the Santa circle of ${secret.map((t) => t.name).join(', ')} - their email can't change until the Santas are revealed`);
         }
       }
     }

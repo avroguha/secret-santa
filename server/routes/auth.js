@@ -59,10 +59,15 @@ module.exports = function authRoutes(router, app) {
   }, { allowPasswordChange: true });
 
   // ---- Microsoft sign-in ----------------------------------------------------
+  // The reason goes to the server log; the page gets a fixed code (and, for
+  // "not on the list", the address it was tried with). Nothing a third party
+  // can put in a link or a forged response ends up as text on the sign-in page.
   const backToLogin = (ctx, code, detail) => {
     appendCookie(ctx.res, serializeCookie(OIDC_COOKIE, '', { httpOnly: true, path: '/auth/azure', maxAge: 0 }));
-    const q = new URLSearchParams({ error: code });
-    if (detail) q.set('detail', String(detail).slice(0, 300));
+    const safe = ['not-invited', 'inactive', 'azure'].includes(code) ? code : 'azure';
+    const q = new URLSearchParams({ error: safe });
+    if (safe === 'not-invited' && detail && isEmail(String(detail))) q.set('detail', String(detail));
+    else if (detail) console.error(`single sign-on (${code}): ${String(detail).slice(0, 500)}`);
     redirect(ctx.res, `/#/login?${q}`);
   };
 

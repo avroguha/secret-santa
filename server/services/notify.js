@@ -56,7 +56,7 @@ function create(app) {
       budget: team.budget,
       startDate: team.start_date,
       endDate: team.end_date,
-      wishlist: T.wishlist(db, childId),
+      wishlist: T.hasSaidYes(db, team.id, childId) ? T.wishlist(db, childId) : [],
       link: teamLink(base, team.id, 'child'),
     }));
   });
@@ -161,7 +161,7 @@ function create(app) {
     const to = user(toId);
     const fromLabel = msg.from_santa ? 'your Secret Santa' : `${T.userName(db, msg.child_id)} (your child)`;
     return send('message', to, emails.message({
-      appTitle, profileLink, toName: nameOf(to), fromLabel, teamName: team.name, body: msg.body,
+      appTitle, profileLink, toName: nameOf(to), fromLabel, subjectFrom: msg.from_santa ? 'your Secret Santa' : 'your child', teamName: team.name, body: msg.body,
       link: teamLink(base, team.id, msg.from_santa ? 'santa' : 'child'),
     }));
   });

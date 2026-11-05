@@ -78,7 +78,8 @@ module.exports = function meRoutes(router, app) {
   });
 
   router.delete('/api/me/wishlist/:itemId', (ctx) => {
-    db.run('DELETE FROM wishlist_items WHERE id = ? AND user_id = ?', id(ctx.params.itemId), ctx.user.id);
+    const r = db.run('DELETE FROM wishlist_items WHERE id = ? AND user_id = ?', id(ctx.params.itemId), ctx.user.id);
+    if (!r.changes) throw fail(404, 'That wish is not on your list');
     return T.wishlist(db, ctx.user.id);
   });
 
@@ -94,7 +95,7 @@ module.exports = function meRoutes(router, app) {
           AND ((child_id = ? AND from_santa = 1) OR (santa_id = ? AND from_santa = 0))`, t.id, ctx.user.id, ctx.user.id).n;
         const openTasks = db.get("SELECT COUNT(*) AS n FROM tasks WHERE team_id = ? AND child_id = ? AND status = 'open'", t.id, ctx.user.id).n;
         const revealed = matched && T.isRevealed(t, day);
-        const mine = db.get('SELECT opted_out, location_confirmed_at FROM team_members WHERE team_id = ? AND user_id = ?', t.id, ctx.user.id);
+        const mine = db.get('SELECT opted_out, location_confirmed_at, accepted_at FROM team_members WHERE team_id = ? AND user_id = ?', t.id, ctx.user.id);
         const checkInOpen = T.checkInOpen(t, matched, day);
         return T.publicTeam(t, {
           phase: T.phaseOf(t, matched, day),
@@ -102,6 +103,7 @@ module.exports = function meRoutes(router, app) {
           optedOut: Boolean(mine.opted_out),
           checkInOpen,
           needsCheckIn: checkInOpen && !mine.opted_out && !mine.location_confirmed_at,
+          saidYes: Boolean(mine.accepted_at) && !mine.opted_out,
           memberCount: db.get('SELECT COUNT(*) AS n FROM team_members WHERE team_id = ? AND opted_out = 0', t.id).n,
           childName: childId ? T.userName(db, childId) : null,
           santaName: revealed && santaId ? T.userName(db, santaId) : null,
@@ -138,6 +140,7 @@ module.exports = function meRoutes(router, app) {
     const resolved = loc || db.get('SELECT location_id FROM users WHERE id = ?', ctx.user.id).location_id;
     const added = db.run('INSERT OR IGNORE INTO team_members (team_id, user_id, location_id, location_confirmed_at, joined_at) VALUES (?, ?, ?, ?, ?)',
       team.id, ctx.user.id, loc, resolved ? nowIso() : null, nowIso()).changes;
+    T.sayYes(db, team.id, ctx.user.id); // joining yourself is saying yes (also when you were added first)
     if (added) app.audit(ctx, 'joined a game', team.name);
     return { ok: true, id: team.id };
   }

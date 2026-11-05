@@ -8,6 +8,7 @@ const { sendText } = require('../lib/http');
 const T = require('../services/teams');
 const U = require('../services/users');
 const emails = require('../services/emails');
+const { isSealed } = require('../services/mailer');
 
 const A = { auth: 'admin' };
 
@@ -103,6 +104,10 @@ module.exports = function adminRoutes(router, app) {
     const role = oneOf(b.role, 'Role', ['user', 'admin'], existing ? existing.role : 'user');
     const active = b.active === undefined ? (existing ? existing.active : 1) : (bool(b.active) ? 1 : 0);
     if (existing && existing.id === ctx.user.id && (role !== 'admin' || !active)) throw fail(400, "You can't remove your own admin rights or deactivate yourself");
+    if (existing && (existing.email || '') !== (f.email || '')) {
+      const secret = T.secretGames(db, existing.id);
+      if (secret.length) throw fail(409, `${existing.username} is in the Santa circle of ${secret.map((t) => t.name).join(', ')}. Changing their email would let someone else sign in as them and see their match, so it waits until the Santas are revealed.`);
+    }
     const clash = db.get('SELECT id, username FROM users WHERE (email = ? OR (external_id IS NOT NULL AND external_id = ?)) AND id <> ?',
       f.email || '', f.externalId || '', existing ? existing.id : 0);
     if (clash) throw fail(409, `That email or ID already belongs to ${clash.username}`);
@@ -154,6 +159,10 @@ module.exports = function adminRoutes(router, app) {
       return { ok: true };
     }
     if (pw.length < 8) throw fail(400, 'Use at least 8 characters');
+    if (u.id !== ctx.user.id) {
+      const secret = T.secretGames(db, u.id);
+      if (secret.length) throw fail(409, `${u.username} is in the Santa circle of ${secret.map((t) => t.name).join(', ')}. Setting their password would let someone else sign in as them and see their match, so it waits until the Santas are revealed - they can sign in with an email code meanwhile.`);
+    }
     try {
       db.run('UPDATE users SET password_hash = ?, must_change_password = 1, updated_at = ? WHERE id = ?', hashPassword(pw), nowIso(), u.id);
     } catch (err) {
@@ -241,6 +250,15 @@ module.exports = function adminRoutes(router, app) {
     const uid = id(ctx.body.userId, 'New owner');
     const u = db.get('SELECT * FROM users WHERE id = ? AND active = 1', uid);
     if (!u) throw fail(400, 'Pick an active person as the new owner');
+    // The platform admin runs the platform, not games: an organiser sees the
+    // whole Santa list, so an admin account can never be handed one - and once
+    // names are drawn (and still secret) only someone already playing in it can
+    // take over, so the admin cannot invent an account to read the list either.
+    if (u.role === 'admin') throw fail(400, 'An admin account cannot organise a game - pick a player');
+    const drawnSecret = T.matchCount(db, team.id) > 0 && !T.isRevealed(team);
+    if (drawnSecret && !db.get('SELECT 1 FROM team_members WHERE team_id = ? AND user_id = ? AND opted_out = 0', team.id, uid)) {
+      throw fail(400, 'Names are drawn and still secret, so the game can only go to someone who plays in it');
+    }
     // A new owner who also plays has not accepted the spoiler: ask them again.
     const plays = db.get('SELECT 1 FROM team_members WHERE team_id = ? AND user_id = ?', team.id, uid);
     db.run('UPDATE teams SET owner_id = ?, owner_ack_at = NULL, updated_at = ? WHERE id = ?', uid, nowIso(), team.id);
@@ -395,7 +413,8 @@ module.exports = function adminRoutes(router, app) {
     const counts = Object.fromEntries(db.all('SELECT status, COUNT(*) AS n FROM outbox GROUP BY status').map((r) => [r.status, r.n]));
     return {
       counts,
-      rows: rows.map((r) => ({ id: r.id, to: r.to_email, toName: r.to_name, subject: r.subject, kind: r.kind, status: r.status, attempts: r.attempts, error: r.error, createdAt: r.created_at, sentAt: r.sent_at })),
+      sealed: !config.demo.enabled,
+      rows: rows.map((r) => ({ id: r.id, to: r.to_email, toName: r.to_name, subject: r.subject, kind: r.kind, status: r.status, attempts: r.attempts, error: r.error, createdAt: r.created_at, sentAt: r.sent_at, sealed: isSealed(r.kind, config.demo.enabled) })),
     };
   }, A);
 
@@ -406,8 +425,16 @@ module.exports = function adminRoutes(router, app) {
   };
 
   router.get('/api/admin/outbox/:mailId/html', (ctx) => {
-    const r = db.get('SELECT html FROM outbox WHERE id = ?', id(ctx.params.mailId));
+    const r = db.get('SELECT html, kind FROM outbox WHERE id = ?', id(ctx.params.mailId));
     if (!r) throw fail(404, 'No such email');
+    // A game email can name someone's Secret Santa child: its body is not for the admin.
+    if (isSealed(r.kind, config.demo.enabled)) {
+      r.html = `<!doctype html><meta charset="utf-8"><body style="font-family:system-ui,sans-serif;padding:24px;line-height:1.5;color:#333">
+        <h2 style="margin:0 0 8px">🔒 Sealed</h2>
+        <p>Game emails can name who someone is Secret Santa for, so their contents are never shown here - not even to an admin.
+        This list still shows who each email went to and whether it was delivered.</p>
+        <p>To see what an email looks like, use <b>Email &gt; Previews</b>, which fills each template with made-up names.</p></body>`;
+    }
     ctx.res.removeHeader('content-security-policy');
     ctx.res.removeHeader('x-frame-options');
     sendText(ctx.res, 200, r.html, 'text/html; charset=utf-8', EMAIL_FRAME_HEADERS);

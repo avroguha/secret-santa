@@ -4,7 +4,7 @@
 // signed-in person can create a game and becomes its owner. Platform admins
 // do not run other people's games (they can only hand one to a new owner, or
 // delete it, under /api/admin/games).
-const { fail, text, id, optionalId, int, bool, date, oneOf, nowIso, today } = require('../lib/util');
+const { fail, text, id, optionalId, int, bool, date, oneOf, nowIso, today, maskEmail, normEmail } = require('../lib/util');
 const T = require('../services/teams');
 
 const M = { auth: 'user' };
@@ -30,6 +30,13 @@ module.exports = function manageRoutes(router, app) {
 
   // Organisers who play see every pairing - including their own Santa. They
   // join their own game only after saying they understand that.
+  // Emails to a whole game that the organiser sends by hand (nudges, re-sends,
+  // a draw with emails). Generous for a real game, useless for spamming.
+  function mailBudget(ctx, team) {
+    app.auth.limit(`team-mail:${team.id}`, 6, 86400e3, 'This game has had six team emails today - give everyone a breather and try again tomorrow');
+    app.auth.limit(`organiser-mail:${ctx.user.id}`, 15, 86400e3, "You've sent a lot of team emails today - try again tomorrow");
+  }
+
   function ownerAck(ctx, team) {
     if (team.owner_ack_at) return;
     if (!bool(ctx.body.ownerAck)) {
@@ -76,6 +83,8 @@ module.exports = function manageRoutes(router, app) {
   router.post('/api/manage/teams', (ctx) => {
     const f = teamFields(ctx.body);
     const at = nowIso();
+    const copyFrom = optionalId(ctx.body.copyFrom, 'Copy from');
+    if (copyFrom && T.getTeam(db, copyFrom).owner_id !== ctx.user.id) throw fail(403, 'You can only copy players from a game you organise');
     let teamId;
     try {
       teamId = db.run(`INSERT INTO teams (name, description, start_date, end_date, budget, match_scope, min_group_size, reveal_mode, join_open,
@@ -87,10 +96,7 @@ module.exports = function manageRoutes(router, app) {
       throw err;
     }
     // Copy members (and optionally exclusions) from an earlier team.
-    const copyFrom = optionalId(ctx.body.copyFrom, 'Copy from');
     if (copyFrom) {
-      const from = T.getTeam(db, copyFrom);
-      if (from.owner_id !== ctx.user.id) throw fail(403, 'You can only copy players from a game you organise');
       db.run(`INSERT INTO team_members (team_id, user_id, location_id, pool_location_id, joined_at)
               SELECT ?, user_id, location_id, pool_location_id, ? FROM team_members WHERE team_id = ?`, teamId, at, copyFrom);
       db.run('INSERT INTO exclusions (team_id, user_a, user_b, created_at) SELECT ?, user_a, user_b, ? FROM exclusions WHERE team_id = ?', teamId, at, copyFrom);
@@ -107,6 +113,7 @@ module.exports = function manageRoutes(router, app) {
       const team = T.getTeam(db, teamId);
       ownerAck(ctx, team);
       db.run('INSERT OR IGNORE INTO team_members (team_id, user_id, joined_at) VALUES (?, ?, ?)', teamId, ctx.user.id, at);
+      T.sayYes(db, teamId, ctx.user.id);
     }
     app.audit(ctx, 'created a game', f.name);
     return { id: teamId };
@@ -144,8 +151,9 @@ module.exports = function manageRoutes(router, app) {
       members: a.members.map((m) => ({
         id: m.userId,
         name: m.name,
-        email: m.email,
-        externalId: m.externalId,
+        // Organisers tell people apart by name and a masked address; they never
+        // get a full address or an employee ID.
+        emailHint: maskEmail(m.email),
         active: Boolean(m.active),
         locationId: m.locationId,
         locationName: m.locationName,
@@ -157,6 +165,7 @@ module.exports = function manageRoutes(router, app) {
         hasWishlist: Boolean(db.get('SELECT 1 FROM wishlist_items WHERE user_id = ? LIMIT 1', m.userId)),
         optedOut: m.optedOut,
         confirmedAt: m.confirmedAt,
+        saidYes: m.accepted,
         dnd: m.dnd,
       })),
       pools: a.pools,
@@ -206,8 +215,8 @@ module.exports = function manageRoutes(router, app) {
   router.post('/api/manage/teams/:teamId/members', (ctx) => {
     const team = loadTeam(ctx);
     let ids = Array.isArray(ctx.body.userIds) ? ctx.body.userIds.map((x) => id(x, 'person')) : [];
-    if (ctx.body.allFromLocation) {
-      const loc = id(ctx.body.allFromLocation, 'Location');
+    const locs = [].concat(ctx.body.allFromLocations || [], ctx.body.allFromLocation || []).slice(0, 50).map((x) => id(x, 'Location'));
+    for (const loc of locs) {
       // a bulk add never adds the organiser - they join on purpose, below
       ids = ids.concat(db.all('SELECT id FROM users WHERE location_id = ? AND active = 1 AND email IS NOT NULL AND id <> ?', loc, ctx.user.id).map((r) => r.id));
     }
@@ -218,6 +227,7 @@ module.exports = function manageRoutes(router, app) {
       for (const uid of new Set(ids)) {
         if (!db.get('SELECT 1 FROM users WHERE id = ? AND active = 1', uid)) continue;
         added += db.run('INSERT OR IGNORE INTO team_members (team_id, user_id, joined_at) VALUES (?, ?, ?)', team.id, uid, at).changes;
+        if (uid === ctx.user.id) T.sayYes(db, team.id, uid);
       }
     });
     app.audit(ctx, 'added people to a team', `${team.name}: ${added}`);
@@ -325,6 +335,7 @@ module.exports = function manageRoutes(router, app) {
     const team = loadTeam(ctx);
     const wasDrawn = T.matchCount(db, team.id) > 0;
     if (wasDrawn && !bool(ctx.body.redraw)) throw fail(409, 'Names were already drawn - confirm a redraw to start over');
+    if (bool(ctx.body.notify)) mailBudget(ctx, team);
     const pairs = T.draw(db, team);
     const fresh = T.getTeam(db, team.id);
     const mailed = bool(ctx.body.notify) ? app.notify.matchedAll(fresh) : 0;
@@ -342,6 +353,10 @@ module.exports = function manageRoutes(router, app) {
   // Seeing the full list spoils the surprise, so it is its own request and logged.
   router.get('/api/manage/teams/:teamId/matches', (ctx) => {
     const team = loadTeam(ctx);
+    const plays = db.get('SELECT 1 FROM team_members WHERE team_id = ? AND user_id = ? AND opted_out = 0', team.id, ctx.user.id);
+    if (plays && !team.owner_ack_at) {
+      throw fail(409, 'You play in this game too, so the Santa list includes who YOUR Santa is. Accept that first.', { code: 'owner_ack' });
+    }
     app.audit(ctx, 'looked at the full Santa list', team.name);
     return db.all(`
       SELECT m.santa_id, m.child_id,
@@ -375,6 +390,7 @@ module.exports = function manageRoutes(router, app) {
     const matched = T.matchCount(db, team.id) > 0;
     if (kind === 'location' && matched) throw fail(409, 'Names have been drawn - check-in is over');
     if (kind === 'gift' && !matched) throw fail(409, 'Draw names first');
+    mailBudget(ctx, team);
     const mailed = app.notify.sendNow(team, kind);
     app.audit(ctx, `sent a gentle ${kind === 'location' ? 'check-in' : 'gift'} nudge`, `${team.name}: ${mailed}`);
     return { mailed, detail: teamDetail(T.getTeam(db, team.id)) };
@@ -383,6 +399,8 @@ module.exports = function manageRoutes(router, app) {
   router.post('/api/manage/teams/:teamId/notify', (ctx) => {
     const team = loadTeam(ctx);
     const kind = oneOf(ctx.body.kind, 'Kind', ['matched', 'reminder', 'start']);
+    if (kind === 'matched' && !T.matchCount(db, team.id)) throw fail(409, 'Draw names first');
+    mailBudget(ctx, team);
     let mailed = 0;
     if (kind === 'matched') {
       if (!T.matchCount(db, team.id)) throw fail(409, 'Draw names first');
@@ -411,6 +429,7 @@ module.exports = function manageRoutes(router, app) {
     if (play) {
       ownerAck(ctx, team);
       db.run('INSERT OR IGNORE INTO team_members (team_id, user_id, joined_at) VALUES (?, ?, ?)', team.id, ctx.user.id, nowIso());
+      T.sayYes(db, team.id, ctx.user.id);
       app.audit(ctx, 'joined their own game as a player', team.name);
     } else {
       const r = T.removeFromCircle(db, team, ctx.user.id);
@@ -424,23 +443,29 @@ module.exports = function manageRoutes(router, app) {
     return teamDetail(T.getTeam(db, team.id));
   }, M);
 
-  // The people directory, for an organiser picking players.
+  // The people directory, for an organiser picking players. A search, not a
+  // list: at least two letters, at most 25 answers, names and locations only
+  // (an email matches only when typed in full), masked addresses, and a cap on
+  // how fast anyone can search - so nobody can page through everyone.
   router.get('/api/directory', (ctx) => {
-    const q = String(ctx.query.q || '').trim().replace(/[%_]/g, '');
-    const teamId = ctx.query.notInTeam ? id(ctx.query.notInTeam, 'game') : null;
-    const args = [];
-    let where = 'u.active = 1 AND u.email IS NOT NULL';
-    if (q) {
-      where += ' AND (u.username LIKE ? OR u.display_name LIKE ? OR u.email LIKE ? OR l.name LIKE ?)';
-      args.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
+    if (!app.auth.limiter.take(`directory:${ctx.user.id}`, 60, 300e3)) {
+      throw fail(429, `That's a lot of searching - try again in ${app.auth.limiter.retryAfter(`directory:${ctx.user.id}`)} seconds`);
     }
-    if (teamId) {
+    const q = String(ctx.query.q || '').trim().replace(/[%_\\]/g, '').slice(0, 80);
+    if (q.length < 2) return [];
+    const args = [`%${q}%`, `%${q}%`, `%${q}%`, normEmail(q)];
+    let where = `u.active = 1 AND u.email IS NOT NULL
+      AND (u.username LIKE ? OR u.display_name LIKE ? OR l.name LIKE ? OR u.email = ?)`;
+    if (ctx.query.notInTeam) {
+      // Only your own game: anyone else's would tell you who plays in it.
+      const team = T.getTeam(db, id(ctx.query.notInTeam, 'game'));
+      if (team.owner_id !== ctx.user.id) throw fail(403, "Only this game's organiser can do that");
       where += ' AND NOT EXISTS (SELECT 1 FROM team_members tm WHERE tm.team_id = ? AND tm.user_id = u.id)';
-      args.push(teamId);
+      args.push(team.id);
     }
     return db.all(`SELECT u.id, u.username, u.display_name, u.email, l.name AS location FROM users u
       LEFT JOIN locations l ON l.id = u.location_id WHERE ${where}
-      ORDER BY COALESCE(NULLIF(u.display_name, ''), u.username) COLLATE NOCASE LIMIT 300`, ...args)
-      .map((u) => ({ id: u.id, name: u.display_name || u.username, email: u.email, location: u.location, me: u.id === ctx.user.id }));
+      ORDER BY COALESCE(NULLIF(u.display_name, ''), u.username) COLLATE NOCASE LIMIT 25`, ...args)
+      .map((u) => ({ id: u.id, name: u.display_name || u.username, emailHint: maskEmail(u.email), location: u.location, me: u.id === ctx.user.id }));
   }, M);
 };

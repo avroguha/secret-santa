@@ -242,7 +242,20 @@ CREATE UNIQUE INDEX teams_invite_code ON teams(invite_code);
 CREATE INDEX teams_owner ON teams(owner_id);
 `;
 
-const MIGRATIONS = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3];
+// v4: "said yes". Anyone can create a game and add anyone to it, so being
+// added is not consent: a child's wishlist and hints reach their Santa only
+// once the child has said yes to that game (joined by invite or sign-up,
+// checked in, counted themselves in, or plays as its organiser).
+const SCHEMA_V4 = `
+ALTER TABLE team_members ADD COLUMN accepted_at TEXT;
+UPDATE team_members SET accepted_at = location_confirmed_at WHERE location_confirmed_at IS NOT NULL AND opted_out = 0;
+UPDATE team_members SET accepted_at = joined_at
+ WHERE accepted_at IS NULL
+   AND user_id = (SELECT owner_id FROM teams t WHERE t.id = team_members.team_id)
+   AND (SELECT owner_ack_at FROM teams t WHERE t.id = team_members.team_id) IS NOT NULL;
+`;
+
+const MIGRATIONS = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4];
 
 function wrap(raw) {
   const cache = new Map();

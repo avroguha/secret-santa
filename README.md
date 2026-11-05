@@ -65,7 +65,9 @@ from the sidelines.
   and exclude last year's pairs.
 * **Invite people**: every game has an invite link (`/#/join/<code>`) and a 10-character code on
   its Players tab. Anyone signed in can join with either; a new code turns the old one off. The
-  organiser can also add people straight from the directory, or everyone from a location.
+  organiser can also add people by searching for them, or everyone from a location. People added
+  this way see the game on their home page and can sit it out; their wishlist and hints reach their
+  Santa once they say yes (see [Privacy and security](#privacy-and-security)).
 * **Sign-up for newcomers**: with Admin > Sign-in > **Open sign-up** on (optionally limited
   to some email domains), someone who is not yet on the list gets a sign-in code, and their
   account is created only once they type it in. An invite link they open first is kept and
@@ -154,6 +156,50 @@ re-importing updates people instead of duplicating them. Template: `sample/peopl
   whether an address is on the list. The outbox keeps a copy with the code blanked out.
 * **Password** - the seeded `admin`, and anyone an admin gives a password (People > Edit).
 
+## Privacy and security
+
+What the app guarantees, each one checked by `test/attacks.test.js`:
+
+* **Every route, the wrong people.** The attack tests read the router's own route list (so a new
+  route is covered automatically) and call every route as someone who must get nowhere -
+  signed out, a stranger, a player of another game, a player of the same game, the organiser of
+  another game, the platform admin - with real ids filled in and tampered values in the body.
+  Every answer must be a refusal and the database must be unchanged afterwards.
+* **A child never learns their Santa** before the reveal: no field, gift, task, note, board
+  entry, count or email gives it away. The child's side of the notes follows the child, so
+  even a change of Santa (a late joiner slotted in, someone taken out) leaves no trace.
+* **A Santa sees only their own child**, and a child's wishlist and hints reach that Santa only
+  once the child has **said yes** to the game. Anyone can create a game and add anyone, so
+  being added is not consent: joining by invite or sign-up, checking in, counting yourself in,
+  or playing as the organiser is. The match email leaves the wishlist out until then too.
+* **The platform admin cannot learn the pairings.** Game emails are **sealed** in the outbox:
+  the admin sees who each email went to, its subject (which never names a child) and whether it
+  arrived, never its contents, and the body is deleted once sent (sign-in codes are stored
+  blanked). An admin account cannot be made organiser of a game; once names are drawn a game
+  can only be handed to someone who plays in it; and an admin cannot change the email or
+  password of anyone in a still-secret draw, by hand or by CSV. (Demo mode is the exception for
+  the outbox: demo people are made up, and the outbox is where demo emails go.)
+* **No harvesting.** The people search needs two letters, answers at most 25 people with masked
+  addresses (`ho•••@example.com`), matches an email only when typed in full, and is rate
+  limited. Organisers never see a full address or an employee ID; players see no addresses.
+* **No guessing.** Every API caller has a request budget (per person and per address), and
+  refusals - asking for a game, gift, task, person or invite code that does not exist or is not
+  yours - lock the caller out after 40 in 10 minutes. Sign-in codes die after 5 wrong tries,
+  and an address takes at most 15 wrong codes a day; a known address answers exactly like an
+  unknown one, in the same time. Passwords lock after 8 wrong tries from one address. Team
+  emails an organiser sends by hand are capped per game and per organiser.
+* **No peeking.** On screen, the child's name is hidden like a password: dots and a
+  **Hold to peek** button that shows it only while held (mouse, finger, or Space / Enter) and
+  hides it on release, when the window loses focus or the tab is hidden. While hidden the name is
+  not in the page at all, so find-in-page and copy cannot reach it. Email subjects and inbox
+  previews never name the child either.
+
+What it cannot promise: whoever runs the **server** or controls **sign-in** (the platform admin
+can point SAML at an identity provider of their choosing) can always act as someone else. Keep
+that role to people you would trust with the Santa list anyway. Limits are kept in memory, so
+a restart resets them. Game names are unique across the platform, so creating a game shows
+whether a name is taken.
+
 ## Look and feel
 
 Frosted-glass panels over a winter night (or a snowy day in light mode), snowfall on by default
@@ -211,7 +257,8 @@ sign-in codes (who can see what, the date window, gifts, tasks, notes, reveal, l
 dropouts, check-in and reminders), game ownership (organisers only reach their own games, the
 spoiler acknowledgement, invite codes, the admin's limits), SAML end to end with a signed
 response from a test identity provider (and tampered, replayed, wrong-audience and unsolicited
-ones refused), demo-mode isolation, and guards for every deployment rule above.
+ones refused), demo-mode isolation, guards for every deployment rule above, and the attack
+tests described under [Privacy and security](#privacy-and-security).
 
 ## Licence
 

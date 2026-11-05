@@ -23,7 +23,7 @@ class Router {
         return part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       })
       .join('/');
-    this.routes.push({ method, re: new RegExp(`^${source}/?$`), keys, handler, opts });
+    this.routes.push({ method, pattern, re: new RegExp(`^${source}/?$`), keys, handler, opts });
   }
 
   get(p, h, o) { this.add('GET', p, h, o); }

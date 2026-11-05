@@ -116,13 +116,15 @@ function matched({ profileLink, appTitle, santaName, childName, childLocation, t
       ${wishes.map((w) => `<li style="margin:3px 0;">${w.url ? `<a href="${esc(w.url)}" style="color:#146b3a;">${esc(w.title)}</a>` : esc(w.title)}</li>`).join('')}
     </ul>` : '<p style="margin:16px 0 0;">Their wishlist is still empty - a gentle nudge through the anonymous notes might help! &#128140;</p>';
   return {
-    subject: `Ho ho ho! You're the Secret Santa for ${childName} 🎅`,
+    // Subject and preheader never name the child: they pop up in notifications
+    // and inbox lists where anyone nearby can read them.
+    subject: `Ho ho ho! Your Secret Santa match in ${teamName} is in 🎅`,
     html: layout({
       profileLink,
       appTitle,
       emoji: '&#127877;',
       title: 'The names are drawn!',
-      preheader: `You are the Secret Santa for ${childName} in ${teamName}.`,
+      preheader: `The names are drawn in ${teamName} - open this when nobody is peeking.`,
       body: `
         <p style="margin:0 0 6px;">Dear ${esc(santaName)}, the elves have spoken &#129497;. In <b>${esc(teamName)}</b> you are the Secret Santa for&hellip;</p>
         ${tag('Your child is', childName, childLocation ? `playing from ${childLocation}` : '')}
@@ -201,15 +203,15 @@ function giftLogged({ profileLink, appTitle, childName, teamName, description, i
   };
 }
 
-function message({ profileLink, appTitle, toName, fromLabel, teamName, body, link }) {
+function message({ profileLink, appTitle, toName, fromLabel, subjectFrom = fromLabel, teamName, body, link }) {
   return {
-    subject: `💌 A note from ${fromLabel}`,
+    subject: `💌 A note from ${subjectFrom}`,
     html: layout({
       profileLink,
       appTitle,
       emoji: '&#128140;',
       title: 'You have a Santa note!',
-      preheader: `${fromLabel} wrote to you in ${teamName}.`,
+      preheader: `${subjectFrom} wrote to you in ${teamName}.`,
       body: `
         <p style="margin:0 0 6px;">Hi ${esc(toName)}, <b>${esc(fromLabel)}</b> sent you a note in <b>${esc(teamName)}</b>:</p>
         ${quote(body)}

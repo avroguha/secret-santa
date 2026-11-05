@@ -140,7 +140,18 @@ function verifyPassword(password, stored) {
 
 const displayName = (u) => (u && (u.display_name || u.username)) || '';
 
+// "holly@example.com" -> "ho•••@example.com": enough to tell two Hollys apart,
+// not enough to harvest addresses.
+function maskEmail(email) {
+  const s = String(email || '');
+  const at = s.lastIndexOf('@');
+  if (at < 1) return '';
+  const local = s.slice(0, at);
+  return `${local.slice(0, local.length > 3 ? 2 : 1)}•••${s.slice(at)}`;
+}
+
 module.exports = {
+  maskEmail,
   HttpError, fail, nowIso, today, addDays, isDate, normEmail, isEmail,
   text, link, id, optionalId, bool, date, int, oneOf,
   randomToken, sha256, safeEqual, hashPassword, verifyPassword, displayName,

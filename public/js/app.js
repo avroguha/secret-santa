@@ -1,5 +1,5 @@
 // App shell: session, header, router.
-import { api, html, mount, actions, loading, avatar, showError, toast } from './lib.js';
+import { api, html, mount, actions, loading, avatar, showError, toast, installSecrets } from './lib.js';
 import { hat } from './art.js';
 import { setSnow, snowPreference, saveSnow } from './snow.js';
 import { loginView, passwordView } from './views/login.js';
@@ -203,6 +203,7 @@ async function boot() {
   }
   bindChrome();
   setSnow(snowPreference());
+  installSecrets();
   window.addEventListener('hashchange', () => {
     window.scrollTo(0, 0);
     render();

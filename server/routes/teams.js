@@ -47,6 +47,18 @@ module.exports = function teamRoutes(router, app) {
     const resolved = loc || db.get('SELECT location_id FROM users WHERE id = ?', ctx.user.id).location_id;
     if (!resolved) throw fail(400, "Pick where you're playing from");
     db.run('UPDATE team_members SET location_id = ?, location_confirmed_at = ? WHERE team_id = ? AND user_id = ?', loc, nowIso(), m.team.id, ctx.user.id);
+    T.sayYes(db, m.team.id, ctx.user.id); // checking in is saying yes
+    return view(ctx, m.team);
+  });
+
+  // "Count me in": for someone an organiser added, once check-in has closed.
+  router.post('/api/teams/:teamId/accept', (ctx) => {
+    const m = member(ctx);
+    const row = db.get('SELECT opted_out FROM team_members WHERE team_id = ? AND user_id = ?', m.team.id, ctx.user.id);
+    if (row.opted_out) throw fail(409, "You're sitting this one out - count yourself back in first");
+    if (m.phase === 'ended') throw fail(409, 'This game is over');
+    T.sayYes(db, m.team.id, ctx.user.id);
+    app.audit(ctx, 'said yes to a game', m.team.name);
     return view(ctx, m.team);
   });
 
@@ -57,6 +69,7 @@ module.exports = function teamRoutes(router, app) {
     if (m.matched) throw fail(409, 'Names have already been drawn - have a quiet word with your organiser and they will sort it out');
     const out = ctx.body.out === undefined ? true : bool(ctx.body.out);
     db.run('UPDATE team_members SET opted_out = ?, opted_out_at = ? WHERE team_id = ? AND user_id = ?', out ? 1 : 0, out ? nowIso() : null, m.team.id, ctx.user.id);
+    if (!out) T.sayYes(db, m.team.id, ctx.user.id); // counting yourself back in is a yes
     app.audit(ctx, out ? 'is sitting a game out' : 'is back in a game', m.team.name);
     return view(ctx, m.team);
   });
@@ -208,8 +221,13 @@ module.exports = function teamRoutes(router, app) {
     throw fail(404, 'Not found');
   }
 
-  const thread = (m, pair) => db.all('SELECT id, from_santa, body, created_at FROM messages WHERE team_id = ? AND santa_id = ? AND child_id = ? ORDER BY id',
-    m.team.id, pair.santaId, pair.childId).map((r) => ({
+  // A Santa sees the notes between them and their child. A child sees every
+  // note of theirs in this game, whichever Santa it was with: if the circle
+  // changes (a late joiner slotted in, someone taken out), nothing on the
+  // child's side vanishes or restarts, so the change gives no Santa away.
+  const thread = (m, pair) => (pair.iAmSanta
+    ? db.all('SELECT id, from_santa, body, created_at FROM messages WHERE team_id = ? AND santa_id = ? AND child_id = ? ORDER BY id', m.team.id, pair.santaId, pair.childId)
+    : db.all('SELECT id, from_santa, body, created_at FROM messages WHERE team_id = ? AND child_id = ? ORDER BY id', m.team.id, pair.childId)).map((r) => ({
     id: r.id,
     mine: Boolean(r.from_santa) === pair.iAmSanta,
     body: r.body,
@@ -219,8 +237,12 @@ module.exports = function teamRoutes(router, app) {
   router.get('/api/teams/:teamId/messages/:side', (ctx) => {
     const m = member(ctx);
     const pair = pairFor(ctx, m);
-    db.run('UPDATE messages SET read_at = ? WHERE team_id = ? AND santa_id = ? AND child_id = ? AND from_santa = ? AND read_at IS NULL',
-      nowIso(), m.team.id, pair.santaId, pair.childId, pair.iAmSanta ? 0 : 1);
+    if (pair.iAmSanta) {
+      db.run('UPDATE messages SET read_at = ? WHERE team_id = ? AND santa_id = ? AND child_id = ? AND from_santa = 0 AND read_at IS NULL',
+        nowIso(), m.team.id, pair.santaId, pair.childId);
+    } else {
+      db.run('UPDATE messages SET read_at = ? WHERE team_id = ? AND child_id = ? AND from_santa = 1 AND read_at IS NULL', nowIso(), m.team.id, pair.childId);
+    }
     return thread(m, pair);
   });
 

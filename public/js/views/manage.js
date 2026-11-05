@@ -154,15 +154,16 @@ function membersTab(d, locations) {
       <button class="btn red" data-act="add-members">+ Add players</button></div>
     ${d.unmatched.length ? html`<div class="alert warn"><span class="ico">🆕</span><div>${plural(d.unmatched.length, 'player joined', 'players joined')} after the draw and ${d.unmatched.length === 1 ? 'is' : 'are'} not in the circle yet. Use <b>Insert</b> to slot them in without redrawing everyone - only one Santa's child changes.</div></div>` : ''}
     ${d.members.length ? html`<div class="table-wrap"><table class="table stack">
-      <thead><tr><th>Player</th><th>Plays from</th><th>Drawn with</th>${drawn ? '' : html`<th>Check-in</th>`}<th>Wishlist</th>${drawn ? html`<th>Circle</th>` : ''}<th></th></tr></thead>
+      <thead><tr><th>Player</th><th>Plays from</th><th>Drawn with</th>${drawn ? '' : html`<th>Check-in</th>`}<th>Said yes</th><th>Wishlist</th>${drawn ? html`<th>Circle</th>` : ''}<th></th></tr></thead>
       <tbody>${d.members.map((m) => html`<tr class="${m.optedOut ? 'row-out' : ''}">
         <td class="first"><div class="row" style="flex-wrap:nowrap">${avatar(m.name, { cls: 'tiny' })}<div><b>${m.name}</b>
           ${m.dnd ? html` <span class="badge" title="Do not disturb - no emails">🔕</span>` : ''}
           ${m.optedOut ? html` <span class="badge">🛋️ sitting out</span>` : ''}
-          <div class="muted" style="font-size:.8rem">${m.email || ''}${m.externalId ? ` · ${m.externalId}` : ''}</div></div></div></td>
+          <div class="muted" style="font-size:.8rem">${m.emailHint || ''}</div></div></div></td>
         <td data-label="Plays from">${m.locationName || html`<span class="badge error">not set</span>`}${m.teamLocationId ? html` <span class="badge" title="Chosen for this team">this team</span>` : ''}</td>
         <td data-label="Drawn with">${poolName.get(m.pool) || ''}${m.poolLocationId ? html` <span class="badge gold">merged</span>` : ''}</td>
         ${drawn ? '' : html`<td data-label="Check-in">${m.optedOut ? '' : m.confirmedAt ? html`<span class="badge ok" title="${fmtDateTime(m.confirmedAt)}">✓ checked in</span>` : html`<span class="badge gold">not yet</span>`}</td>`}
+        <td data-label="Said yes">${m.optedOut ? '' : m.saidYes ? html`<span class="badge ok" title="Their wishlist and hints reach their Santa">✓ yes</span>` : html`<span class="badge gold" title="Added by you - they have not said yes yet, so their Santa does not see their wishlist or hints">not yet</span>`}</td>
         <td data-label="Wishlist">${m.hasWishlist ? '✅' : html`<span class="muted">empty</span>`}</td>
         ${drawn ? html`<td data-label="Circle">${m.inCircle ? html`<span class="badge ok">in</span>` : m.optedOut ? html`<span class="muted">-</span>` : html`<button class="btn small gold" data-act="insert" data-id="${m.id}">Insert</button>`}</td>` : ''}
         <td class="nowrap">${!m.inCircle && !m.optedOut ? html`<button class="btn link small" data-act="member-loc" data-id="${m.id}">Location</button>` : ''}
@@ -368,46 +369,72 @@ export async function manageView(main, { params, isCurrent }) {
     'scope-all': async () => { d = await saveTeam({ matchScope: 'all' }); draw(); },
     'scope-loc': async () => { d = await saveTeam({ matchScope: 'location' }); draw(); },
     'add-members': async () => {
-      const active = (await api.get(`/api/directory?notInTeam=${id}`)).map((u) => ({ ...u, locationName: u.location }));
+      // A search, not a list of everyone: the directory answers at least two
+      // letters with at most 25 people and masked addresses.
+      const picked = new Map(); // id -> name, kept across searches
+      const pickedLocs = new Set();
+      let timer = null;
       const out = await formModal({
         title: '➕ Add players',
-        submit: 'Add selected',
+        submit: 'Add',
         wide: true,
         body: html`
-          ${active.length ? html`
-            <div class="row" style="margin-bottom:10px">
-              <input type="search" id="pick-q" placeholder="Filter by name, email or location" style="flex:1">
-              <button class="btn ghost small" type="button" data-pick-all>Select shown</button>
-            </div>
-            <div class="row" style="margin-bottom:10px">${locations.map((l) => html`<button class="btn ghost small" type="button" data-pick-loc="${l.name}">All from ${l.name}</button>`)}</div>
-            <div class="persona-list" style="max-height:340px">${active.map((u) => html`
-              <label class="persona" data-search="${`${u.name} ${u.email} ${u.locationName || ''}`.toLowerCase()}" data-loc="${u.locationName || ''}">
-                <input type="checkbox" name="u${u.id}" value="${u.id}" ${u.me ? 'data-me' : ''}> ${avatar(u.name)}
-                <span><b>${u.name}</b>${u.me ? html` <span class="badge gold">you</span>` : ''}<span class="meta">${u.email} · ${u.locationName || 'no location'}</span></span></label>`)}</div>`
-    : html`<p class="muted">Everyone is already in this game. Share the invite link with anyone else.</p>`}
-          <label class="check" data-ack hidden style="margin-top:12px"><input type="checkbox" name="ownerAck"><span>${OWNER_ACK}</span></label>`,
+          <div class="field"><label for="pick-q">Find people</label>
+            <input type="search" id="pick-q" placeholder="Two or more letters of a name or location - or a full email" autocomplete="off">
+            <div class="hint">They'll see this game on their home page and can sit it out. Their wishlist and hints reach their Santa only once they say yes.</div></div>
+          <div class="persona-list" data-results style="max-height:300px"><p class="muted" style="margin:6px 0">Start typing to search.</p></div>
+          ${locations.length ? html`<div class="field" style="margin-top:12px"><label>Or everyone from a location</label>
+            <div class="row">${locations.map((l) => html`<button class="btn ghost small" type="button" data-pick-loc="${l.id}" aria-pressed="false">📍 ${l.name}</button>`)}</div></div>` : ''}
+          <div data-picked class="row" style="margin-top:12px;gap:6px"></div>`,
         onOpen: (dlg) => {
           const q = dlg.querySelector('#pick-q');
-          if (!q) return;
-          const me = dlg.querySelector('[data-me]');
-          if (me && !d.team.ownerAccepted) me.addEventListener('change', () => { dlg.querySelector('[data-ack]').hidden = !me.checked; });
-          q.addEventListener('input', () => {
-            const s = q.value.toLowerCase();
-            for (const row of dlg.querySelectorAll('[data-search]')) row.hidden = !row.dataset.search.includes(s);
+          const results = dlg.querySelector('[data-results]');
+          const pickedBox = dlg.querySelector('[data-picked]');
+          const note = (t) => { results.innerHTML = String(html`<p class="muted" style="margin:6px 0">${t}</p>`); };
+          const showPicked = () => {
+            pickedBox.innerHTML = String(picked.size ? html`<span class="muted">Adding:</span>${[...picked].map(([pid, name]) => html`<button type="button" class="badge" data-unpick="${pid}" title="Take off the list">${name} ✕</button>`)}` : '');
+          };
+          const search = async () => {
+            const s = q.value.trim();
+            if (s.length < 2) { note('Start typing to search.'); return; }
+            try {
+              const found = (await api.get(`/api/directory?q=${encodeURIComponent(s)}&notInTeam=${id}`)).filter((u) => !u.me);
+              if (q.value.trim() !== s) return;
+              if (!found.length) { note(`Nobody new matches "${s}".`); return; }
+              results.innerHTML = String(found.map((u) => html`
+                <label class="persona"><input type="checkbox" data-pick="${u.id}" data-name="${u.name}" ${picked.has(u.id) ? 'checked' : ''}> ${avatar(u.name)}
+                  <span><b>${u.name}</b><span class="meta">${u.emailHint} · ${u.location || 'no location'}</span></span></label>`));
+            } catch (err) { note(errorText(err)); }
+          };
+          q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(search, 250); });
+          dlg.addEventListener('change', (e) => {
+            const box = e.target.closest('[data-pick]');
+            if (!box) return;
+            if (box.checked) picked.set(Number(box.dataset.pick), box.dataset.name);
+            else picked.delete(Number(box.dataset.pick));
+            showPicked();
           });
           dlg.addEventListener('click', (e) => {
-            const all = e.target.closest('[data-pick-all]');
+            const un = e.target.closest('[data-unpick]');
+            if (un) {
+              picked.delete(Number(un.dataset.unpick));
+              const cb = results.querySelector(`[data-pick="${un.dataset.unpick}"]`);
+              if (cb) cb.checked = false;
+              showPicked();
+            }
             const loc = e.target.closest('[data-pick-loc]');
-            for (const row of dlg.querySelectorAll('[data-search]')) {
-              if (all && !row.hidden) row.querySelector('input').checked = true;
-              if (loc && row.dataset.loc === loc.dataset.pickLoc) row.querySelector('input').checked = true;
+            if (loc) {
+              const lid = Number(loc.dataset.pickLoc);
+              if (pickedLocs.has(lid)) pickedLocs.delete(lid); else pickedLocs.add(lid);
+              loc.classList.toggle('ghost', !pickedLocs.has(lid));
+              loc.setAttribute('aria-pressed', String(pickedLocs.has(lid)));
             }
           });
+          q.focus();
         },
-        onSubmit: (v) => {
-          const userIds = Object.entries(v).filter(([k, val]) => k.startsWith('u') && val === true).map(([k]) => Number(k.slice(1)));
-          if (!userIds.length) throw new Error('Pick at least one person');
-          return api.post(`${base}/members`, { userIds, ownerAck: v.ownerAck });
+        onSubmit: () => {
+          if (!picked.size && !pickedLocs.size) throw new Error('Pick at least one person or location');
+          return api.post(`${base}/members`, { userIds: [...picked.keys()], allFromLocations: [...pickedLocs] });
         },
       });
       if (out && out.detail) { d = out.detail; toast(`${plural(out.added, 'player')} added 🎉`, 'ok'); draw(); }
@@ -494,7 +521,15 @@ export async function manageView(main, { params, isCurrent }) {
       draw();
     },
     'load-matches': async () => {
-      matches = { rows: await api.get(`${base}/matches`), open: false };
+      try {
+        matches = { rows: await api.get(`${base}/matches`), open: false };
+      } catch (err) {
+        // An organiser who plays (say, after a hand-over) accepts the spoiler first.
+        if (!(err.details && err.details.code === 'owner_ack')) throw err;
+        if (!await confirmBox(OWNER_ACK, { title: '🤫 One thing first', ok: 'I understand' })) return;
+        d = await api.post(`${base}/play`, { play: true, ownerAck: true });
+        matches = { rows: await api.get(`${base}/matches`), open: false };
+      }
       draw();
     },
     seal: () => { matches.open = !matches.open; draw(); },

@@ -329,3 +329,67 @@ export function markdown(src) {
   flushList();
   return raw(`<div class="prose">${out}</div>`);
 }
+
+// ---- secret names ---------------------------------------------------------------------
+// A Santa's child is shown like a password: a row of dots and a "hold to peek"
+// button. The name appears only while the button is held down (mouse, finger,
+// or Space / Enter) and goes away the moment it is released, the pointer is
+// cancelled, the button loses focus, or the window is hidden. The name itself
+// is never in the page while hidden - it lives in this map, keyed by a random
+// id - so find-in-page, text selection, copy and screen-reader browsing cannot
+// reach it either. The mask has a fixed length so it does not hint at the name.
+const SECRETS = new Map();
+const MASK = '<span aria-hidden="true">••••••••</span><span class="sr-only">hidden name</span>';
+
+export function secretName(name, { hint = 'Hold to peek' } = {}) {
+  if (SECRETS.size > 200) {
+    for (const key of SECRETS.keys()) if (!document.querySelector(`[data-secret="${key}"]`)) SECRETS.delete(key);
+  }
+  const key = `s${Math.random().toString(36).slice(2, 10)}`;
+  SECRETS.set(key, String(name));
+  return html`<span class="secret" data-secret="${key}"><span class="secret-text" aria-live="polite">${raw(MASK)}</span><button type="button" class="secret-peek" aria-label="Press and hold to see the name"><span aria-hidden="true">👁️</span> ${hint}</button></span>`;
+}
+
+function showSecret(btn) {
+  const box = btn.closest('[data-secret]');
+  const name = box && SECRETS.get(box.dataset.secret);
+  if (name === undefined || name === null) return;
+  box.classList.add('shown');
+  box.querySelector('.secret-text').textContent = name;
+}
+
+export function hideSecrets() {
+  document.querySelectorAll('.secret.shown').forEach((box) => {
+    box.classList.remove('shown');
+    box.querySelector('.secret-text').innerHTML = MASK;
+  });
+}
+
+let secretsInstalled = false;
+export function installSecrets() {
+  if (secretsInstalled) return;
+  secretsInstalled = true;
+  const peek = (e) => (e.target instanceof Element ? e.target.closest('.secret-peek') : null);
+  document.addEventListener('pointerdown', (e) => {
+    const btn = peek(e);
+    if (!btn || e.button > 0) return;
+    e.preventDefault(); // no focus jump, no text selection, no long-press menu
+    try { btn.setPointerCapture(e.pointerId); } catch { /* not every pointer can be captured */ }
+    showSecret(btn);
+  });
+  for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) document.addEventListener(type, hideSecrets, true);
+  document.addEventListener('keydown', (e) => {
+    const btn = peek(e);
+    if (!btn || (e.key !== ' ' && e.key !== 'Enter')) return;
+    e.preventDefault();
+    if (!e.repeat) showSecret(btn);
+  });
+  document.addEventListener('keyup', (e) => { if (peek(e) && (e.key === ' ' || e.key === 'Enter')) hideSecrets(); });
+  document.addEventListener('focusout', (e) => { if (peek(e)) hideSecrets(); });
+  // A held button must never trigger anything else (a card link, a delegated action).
+  document.addEventListener('click', (e) => { if (peek(e)) { e.preventDefault(); e.stopPropagation(); } }, true);
+  document.addEventListener('contextmenu', (e) => { if (peek(e)) e.preventDefault(); }, true);
+  window.addEventListener('blur', hideSecrets);
+  window.addEventListener('pagehide', hideSecrets);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) hideSecrets(); });
+}

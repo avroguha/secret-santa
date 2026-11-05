@@ -12,6 +12,7 @@ const CSRF_COOKIE = 'ss_csrf';
 const SESSION_DAYS = 7;
 const OTP_MINUTES = 10;
 const OTP_MAX_ATTEMPTS = 5;
+const OTP_BAD_PER_DAY = 15;
 
 // In-memory fixed-window limiter. One process serves the app, so this is enough.
 class Limiter {
@@ -36,6 +37,12 @@ class Limiter {
   retryAfter(key) {
     const h = this.hits.get(key);
     return h ? Math.max(1, Math.ceil((h.reset - Date.now()) / 1000)) : 1;
+  }
+
+  // How many hits the key has in its current window, without adding one.
+  count(key) {
+    const h = this.hits.get(key);
+    return h && h.reset > Date.now() ? h.count : 0;
   }
 
   clear(key) {
@@ -199,14 +206,16 @@ function create(app) {
       html: msg.html.split(code).join('••••••').split(code.replace(/(\d{3})(?=\d)/g, '$1 ')).join('••• •••'),
       text: msg.text.split(code).join('••••••'),
     };
-    try {
-      await app.mailer.sendNow({ to: email, toName: user ? displayName(user) : '', ...msg });
-      app.mailer.record({ to: email, toName: user ? displayName(user) : '', kind: 'otp', ...redacted }, 'sent');
-    } catch (err) {
-      app.mailer.record({ to: email, toName: user ? displayName(user) : '', kind: 'otp', ...redacted }, 'failed', String(err.message).slice(0, 500));
-      console.error(`otp mail to ${email} failed: ${err.message}`);
-      throw fail(502, "We couldn't send the email just now - try again in a minute, or tell your admin the mail relay looks down.");
-    }
+    // Sent without waiting: a known address must answer exactly like an
+    // unknown one, or the time taken would say who is on the list. A failed
+    // send shows in Admin > Outbox and Overview.
+    const toName = user ? displayName(user) : '';
+    app.mailer.sendNow({ to: email, toName, ...msg })
+      .then(() => app.mailer.record({ to: email, toName, kind: 'otp', ...redacted }, 'sent'))
+      .catch((err) => {
+        app.mailer.record({ to: email, toName, kind: 'otp', ...redacted }, 'failed', String(err.message).slice(0, 500));
+        console.error(`otp mail to ${email} failed: ${err.message}`);
+      });
     return answer;
   }
 
@@ -216,6 +225,10 @@ function create(app) {
     if (!isEmail(email) || !/^\d{4,8}$/.test(code)) throw fail(400, 'Enter the code from the email');
     limit(`otp-verify-ip:${ctx.ip}`, 60, 15 * 60e3);
     limit(`otp-verify:${email}`, 10, 15 * 60e3, 'Too many wrong codes - ask for a new one in a few minutes');
+    if (limiter.count(`otp-bad-day:${email}`) >= OTP_BAD_PER_DAY) {
+      throw fail(429, 'Too many wrong codes for this address today - try again tomorrow, or ask your admin', { retryAfter: limiter.retryAfter(`otp-bad-day:${email}`) });
+    }
+    const wrong = () => limiter.take(`otp-bad-day:${email}`, Infinity, 86400e3);
     const bad = () => fail(401, "That code didn't work - check it, or ask for a new one");
     const user = db.get('SELECT * FROM users WHERE email = ? AND active = 1', email);
     if (config.demo.enabled) {
@@ -233,6 +246,7 @@ function create(app) {
     }
     if (!safeEqual(sha256(`${row.salt}:${code}`), row.code_hash)) {
       db.run('UPDATE otp_codes SET attempts = attempts + 1 WHERE id = ?', row.id);
+      wrong();
       throw bad();
     }
     db.run('UPDATE otp_codes SET used_at = ? WHERE id = ?', nowIso(), row.id);
@@ -245,8 +259,10 @@ function create(app) {
     const username = String(rawUser || '').trim();
     if (!username || !password) throw fail(400, 'Enter your username and password');
     limit(`pw-ip:${ctx.ip}`, 30, 15 * 60e3);
-    const key = `pw:${username.toLowerCase()}`;
+    const key = `pw:${username.toLowerCase()}:${ctx.ip}`;
+    const accountKey = `pw:${username.toLowerCase()}`;
     limit(key, 8, 15 * 60e3, 'Too many failed sign-ins for that account - wait 15 minutes');
+    limit(accountKey, 40, 15 * 60e3, 'Too many failed sign-ins for that account - wait 15 minutes');
     const user = db.get('SELECT * FROM users WHERE username = ? COLLATE NOCASE AND password_hash IS NOT NULL AND active = 1', username);
     // Verify against a dummy hash when the user is unknown, so timing does not tell.
     const ok = verifyPassword(password, user ? user.password_hash : DUMMY_HASH);

@@ -65,6 +65,7 @@ function createApp(config) {
   else seedAdmin(db);
 
   const router = new Router();
+  app.router = router; // the attack tests sweep every route from here
   require('./routes/auth')(router, app);
   require('./routes/me')(router, app);
   require('./routes/teams')(router, app);
@@ -101,8 +102,24 @@ function createApp(config) {
     return `${proto}://${host}`;
   }
 
+  // API-wide limits on top of the sign-in ones in services/auth.js. Generous for
+  // a person clicking around; tight for a script. "Refusals" are 403 / 404
+  // answers - asking for a game, gift, task, person or invite code that does
+  // not exist or is not yours - which is exactly what guessing ids looks like.
+  app.limits = {
+    perIp: 3000, // requests per IP per 5 minutes (an office behind one address)
+    perUser: 900, // requests per signed-in person per 5 minutes
+    refusals: 40, // 403 / 404 answers per person (or IP) per 10 minutes
+  };
+  const tooMany = (key, message) => {
+    const wait = app.auth.limiter.retryAfter(key);
+    return new HttpError(429, message || `Slow down a little - try again in ${wait} seconds`, { retryAfter: wait });
+  };
+
   async function handle(req, res) {
     securityHeaders(res, { tls: Boolean(req.socket.encrypted) });
+    let refusalKey = null;
+    let ipRefusalKey = null;
     let url;
     try {
       url = new URL(req.url, 'http://localhost');
@@ -122,18 +139,29 @@ function createApp(config) {
         serveStatic(req, res, config.publicDir, p);
         return;
       }
-      const m = router.match(req.method, p);
-      if (!m) throw new HttpError(404, 'Not found');
-      if (m.methodNotAllowed) throw new HttpError(405, 'Method not allowed');
-      const opts = m.route.opts;
       const ctx = {
-        req, res, url, params: m.params, query: Object.fromEntries(url.searchParams),
+        req, res, url, params: {}, query: Object.fromEntries(url.searchParams),
         cookies: parseCookies(req.headers.cookie), ip: clientIp(req), origin: requestOrigin(req),
       };
+      const { limiter } = app.auth;
+      if (!limiter.take(`api-ip:${ctx.ip}`, app.limits.perIp, 300e3)) throw tooMany(`api-ip:${ctx.ip}`);
       app.auth.ensureCsrf(ctx);
       ctx.session = app.auth.loadSession(ctx);
       ctx.user = ctx.session ? ctx.session.user : null;
       if (ctx.user) ctx.user.name = displayName(ctx.user);
+      refusalKey = `refused:${ctx.user ? `u${ctx.user.id}` : `ip${ctx.ip}`}`;
+      ipRefusalKey = `refused-ip:${ctx.ip}`;
+      for (const [key, max] of [[refusalKey, app.limits.refusals], [ipRefusalKey, app.limits.refusals * 5]]) {
+        if (limiter.count(key) >= max) {
+          throw tooMany(key, `Too many requests for things that are not there or not yours - try again in ${Math.ceil(limiter.retryAfter(key) / 60)} minutes`);
+        }
+      }
+      if (ctx.user && !limiter.take(`api-user:${ctx.user.id}`, app.limits.perUser, 300e3)) throw tooMany(`api-user:${ctx.user.id}`);
+      const m = router.match(req.method, p);
+      if (!m) throw new HttpError(404, 'Not found');
+      if (m.methodNotAllowed) throw new HttpError(405, 'Method not allowed');
+      const opts = m.route.opts;
+      ctx.params = m.params;
       // noCsrf: only the SAML assertion consumer, protected by the signed response itself.
       if (MUTATING.has(req.method) && !opts.noCsrf) app.auth.checkCsrf(ctx);
       const need = opts.auth || 'user';
@@ -153,6 +181,11 @@ function createApp(config) {
     } catch (err) {
       const known = err instanceof HttpError;
       const status = known ? err.status : 500;
+      if (isApi && refusalKey && (status === 403 || status === 404)) {
+        app.auth.limiter.take(refusalKey, Infinity, 600e3);
+        app.auth.limiter.take(ipRefusalKey, Infinity, 600e3);
+      }
+      if (status === 429 && err.details && err.details.retryAfter && !res.headersSent) res.setHeader('retry-after', String(err.details.retryAfter));
       if (!known) console.error(`${req.method} ${p}: ${err.stack || err.message}`);
       if (res.headersSent) {
         res.destroy();

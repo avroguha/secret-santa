@@ -1,7 +1,11 @@
 import {
   api, html, mount, actions, fmtDate, fmtShort, ago, phaseBadge, plural, toast, formModal, confirmBox,
-  avatar, extLink, todayStr, daysBetween, markdown,
+  avatar, extLink, todayStr, daysBetween, markdown, secretName,
 } from '../lib.js';
+
+// Until the reveal, the child's name is only ever shown by press-and-hold;
+// everywhere else the page says "your child".
+const childLabel = (v, name) => (v.team.revealed ? name : secretName(name));
 
 // The four phases of a game, with where we are now.
 function timeline(v) {
@@ -31,22 +35,27 @@ function checkInCard(v, locations) {
     : html`<p class="muted">Names have been drawn - if you'd like to join after all, have a word with your organiser.</p>`}
     </div>`;
   }
+  // Added by the organiser and check-in is over: one tap to say yes.
+  const yesCard = !me.saidYes && (t.phase !== 'setup' || !v.checkIn.open) && t.phase !== 'ended' ? html`<div class="card">
+      <h3>🙋 Are you in?</h3>
+      <p>Your organiser added you to <b>${t.name}</b>. Say yes and your Santa gets to see your wishlist and hints - until then they stay private.</p>
+      <button class="btn red" data-act="accept">🎄 Count me in</button></div>` : '';
   if (t.phase !== 'setup') {
-    return html`<div class="card"><h3>📍 Where you play from</h3><p>You play from <b>${me.locationName || 'no location'}</b>.</p>
+    return html`${yesCard}<div class="card"><h3>📍 Where you play from</h3><p>You play from <b>${me.locationName || 'no location'}</b>.</p>
       <p class="muted">Names have been drawn, so have a word with your organiser if this changed.</p></div>`;
   }
   const sitOut = html`<hr><p class="muted" style="margin-bottom:6px">Not feeling it this year? That's completely okay. 💛</p>
     <button class="btn ghost small" data-act="sit-out">🛋️ Sit this one out</button>
     ${t.joinOpen ? html` <button class="btn danger-link small" data-act="leave">Leave this game</button>` : ''}`;
   if (!v.checkIn.open) {
-    return html`<div class="card"><h3>📍 Where you play from</h3>
+    return html`${yesCard}<div class="card"><h3>📍 Where you play from</h3>
       <p>${me.locationName ? html`You play from <b>${me.locationName}</b>.` : 'No location yet.'}</p>
       <p class="muted">Check-in closed on ${fmtDate(v.checkIn.deadline)} - have a word with your organiser if this changed.</p>${sitOut}</div>`;
   }
   return html`<div class="card">
     <div class="card-title"><h3>📍 Step 1: check in</h3><span class="spacer"></span>
       ${me.confirmedAt ? html`<span class="badge ok">✓ checked in</span>` : html`<span class="badge gold">when you're ready</span>`}</div>
-    <p class="muted">Where are you playing from? You'll be paired with people nearby.${v.checkIn.deadline ? ` Any time before ${fmtDate(v.checkIn.deadline)} is perfect.` : ''}</p>
+    <p class="muted">Where are you playing from? You'll be paired with people nearby.${v.checkIn.deadline ? ` Any time before ${fmtDate(v.checkIn.deadline)} is perfect.` : ''}${me.saidYes ? '' : ' Checking in also lets your Santa see your wishlist and hints.'}</p>
     <form id="loc-form">
       <div class="field"><label for="myloc">I'm playing from</label>
         <select id="myloc" name="locationId">
@@ -116,21 +125,22 @@ function childTab(v, thread) {
         <div class="card ribbon"><div class="card-body">
           <div class="gift-tag">
             <div class="label">You are Secret Santa for</div>
-            <div class="value">${c.name}</div>
+            <div class="value">${childLabel(v, c.name)}</div>
             <div class="sub">${c.location ? html`📍 playing from ${c.location}` : 'no location given'}${v.team.budget ? html` · 💰 ${v.team.budget}` : ''}</div>
           </div>
           <p class="muted" style="margin:12px 0 0;text-align:center">🤫 Shh - they can't see that it's you.</p>
         </div></div>
 
         <div class="card">
-          <div class="card-title"><h2>🎁 ${c.name.split(' ')[0]}'s wishlist</h2><span class="badge">${plural(c.wishlist.length, 'wish', 'wishes')}</span></div>
+          <div class="card-title"><h2>🎁 ${v.team.revealed ? `${c.name.split(' ')[0]}'s` : "Your child's"} wishlist</h2><span class="badge">${plural(c.wishlist.length, 'wish', 'wishes')}</span></div>
           ${c.wishlist.length ? html`<ul class="list">${c.wishlist.map((w) => html`
             <li><span class="emoji" title="${PRIORITY[w.priority][1]}">${PRIORITY[w.priority][0]}</span>
               <div class="grow"><div class="title">${w.title}</div>
                 ${w.notes ? html`<div class="meta" style="white-space:pre-line">${w.notes}</div>` : ''}
                 ${w.url ? html`<div class="meta">${extLink(w.url)}</div>` : ''}</div>
               <span class="badge ${w.priority === 1 ? 'red' : ''}">${PRIORITY[w.priority][1]}</span></li>`)}</ul>`
-    : html`<div class="empty"><span class="big-emoji">📭</span>Their wishlist is empty. Send an anonymous note to nudge them - or check their hints!</div>`}
+    : c.saidYes === false ? html`<div class="empty"><span class="big-emoji">⏳</span>They haven't said yes to this game yet, so their wishlist and hints stay private for now. They'll appear here the moment they do - an anonymous note might help!</div>`
+      : html`<div class="empty"><span class="big-emoji">📭</span>Their wishlist is empty. Send an anonymous note to nudge them - or check their hints!</div>`}
         </div>
 
         <div class="card">
@@ -165,10 +175,10 @@ function childTab(v, thread) {
       </div>
 
       <aside class="stack">
-        ${hints.length ? html`<div class="card"><h3>⭐ Hints from ${c.name.split(' ')[0]}</h3>
+        ${hints.length ? html`<div class="card"><h3>⭐ Hints from ${v.team.revealed ? c.name.split(' ')[0] : 'your child'}</h3>
           <div class="stack">${hints.map(([k, val]) => html`<div class="hint-box"><div class="k">${HINT_LABELS[k]}</div><div class="v">${val}</div></div>`)}</div></div>` : ''}
         <div class="card">
-          <div class="card-title">${avatar(c.name)}<div><h3>Notes with ${c.name.split(' ')[0]}</h3><div class="muted" style="font-size:.85rem">They see you as "your Secret Santa"</div></div></div>
+          <div class="card-title">${v.team.revealed ? avatar(c.name) : html`<span class="avatar mystery" aria-hidden="true">🎁</span>`}<div><h3>Notes with ${v.team.revealed ? c.name.split(' ')[0] : 'your child'}</h3><div class="muted" style="font-size:.85rem">They see you as "your Secret Santa"</div></div></div>
           ${chatBox(thread, 'child', v.canMessage)}
         </div>
       </aside>
@@ -236,7 +246,7 @@ function boardTab(v, board, filter) {
     </div>
     ${shown.length ? html`<div class="board">${shown.map((t) => html`
       <div class="task-card ${t.status === 'done' ? 'done' : ''}">
-        <div class="who">${t.forMe ? '🎯 Mission for you' : `Mission for ${t.childName}`}</div>
+        <div class="who">${t.forMe ? '🎯 Mission for you' : t.byMe && !v.team.revealed ? html`Mission for ${secretName(t.childName, { hint: 'Hold' })}` : `Mission for ${t.childName}`}</div>
         <div class="t">${t.title}</div>
         ${t.details ? html`<div class="d">${t.details}</div>` : ''}
         ${t.doneNote ? html`<div class="d">💬 "${t.doneNote}"</div>` : ''}
@@ -377,13 +387,18 @@ export async function teamView(main, { params, isCurrent }) {
       toast('Got it - enjoy the festivities from the sofa! 🛋️☕', 'ok');
       draw();
     },
+    accept: async () => {
+      v = await api.post(`${base}/accept`);
+      toast(`You're in! 🎉 Your Santa can see your wishlist now`, 'ok');
+      draw();
+    },
     'sit-in': async () => {
       v = await api.post(`${base}/sit-out`, { out: false });
       toast(`Welcome back to ${v.team.name}! 🎄`, 'ok');
       draw();
     },
     'add-gift': async () => {
-      const out = await formModal({ title: `🎁 A gift for ${v.child.name}`, submit: 'Log gift', body: giftFields({}, v.team), onSubmit: (f) => api.post(`${base}/gifts`, f) });
+      const out = await formModal({ title: '🎁 A gift for your child', submit: 'Log gift', body: giftFields({}, v.team), onSubmit: (f) => api.post(`${base}/gifts`, f) });
       if (out && out.team) { v = out; draw(); toast('Gift logged - ho ho ho! 🎁', 'ok'); }
     },
     'edit-gift': async (d) => {
@@ -408,7 +423,7 @@ export async function teamView(main, { params, isCurrent }) {
       if (out && out.team) { v = out; draw(); toast('Thanks sent to your Santa 💌', 'ok'); }
     },
     'add-task': async () => {
-      const out = await formModal({ title: `🧝 A fun task for ${v.child.name}`, submit: 'Set task', body: taskFields({}, v.team), onSubmit: (f) => api.post(`${base}/tasks`, f) });
+      const out = await formModal({ title: '🧝 A fun task for your child', submit: 'Set task', body: taskFields({}, v.team), onSubmit: (f) => api.post(`${base}/tasks`, f) });
       if (out && out.team) { v = out; draw(); toast('Mission set! 🎯', 'ok'); }
     },
     'edit-task': async (d) => {

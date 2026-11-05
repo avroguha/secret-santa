@@ -151,7 +151,10 @@ test('sign-in by emailed code; the outbox keeps the code blanked out', async () 
   assert.ok(html.includes('••• •••'));
   // wrong codes are counted and refused
   const c = await env.client().init();
+  const sentBefore = smtp.messages.length;
   await c.post('/api/auth/otp/request', { email: 'jack@example.com' }).catch(() => {});
+  // the code email goes out in the background (so known and unknown addresses answer alike)
+  await waitFor(() => smtp.messages.slice(sentBefore).some((m) => m.rcpt.join().includes('jack@example.com') && /\d{6} is your/.test(m.data)));
   const wrong = await c.post('/api/auth/otp/verify', { email: 'jack@example.com', code: '000000' });
   assert.equal(wrong.status, 401);
   // unknown addresses get the same answer and no email

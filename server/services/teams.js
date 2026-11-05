@@ -32,6 +32,20 @@ function phaseOf(team, matched, day = today()) {
 
 const isRevealed = (team, day = today()) => Boolean(team.revealed) || (team.reveal_mode === 'after_end' && day > team.end_date);
 
+// Has this person said yes to this game? (See SCHEMA_V4 in db.js.)
+const hasSaidYes = (db, teamId, userId) => Boolean(db.get(
+  'SELECT 1 FROM team_members WHERE team_id = ? AND user_id = ? AND accepted_at IS NOT NULL AND opted_out = 0', teamId, userId));
+const sayYes = (db, teamId, userId) => db.run(
+  'UPDATE team_members SET accepted_at = COALESCE(accepted_at, ?) WHERE team_id = ? AND user_id = ?', nowIso(), teamId, userId);
+
+// Games in which this person is in the drawn circle and the Santas are still
+// secret. Whoever could sign in as them there would learn a pairing, so the
+// platform admin may not change their sign-in (email, password) meanwhile.
+function secretGames(db, userId, day = today()) {
+  return db.all(`SELECT DISTINCT t.* FROM teams t JOIN matches m ON m.team_id = t.id
+                   WHERE m.santa_id = ? OR m.child_id = ?`, userId, userId).filter((t) => !isRevealed(t, day));
+}
+
 // Everyone in the team, including those sitting this one out (optedOut).
 function members(db, teamId) {
   return db.all(`
@@ -39,14 +53,14 @@ function members(db, teamId) {
            tm.location_id AS teamLocationId, u.location_id AS profileLocationId,
            COALESCE(tm.location_id, u.location_id) AS locationId, l.name AS locationName,
            tm.pool_location_id AS poolLocationId, pl.name AS poolLocationName, tm.joined_at AS joinedAt,
-           tm.opted_out, tm.opted_out_at AS optedOutAt, tm.location_confirmed_at AS confirmedAt
+           tm.opted_out, tm.opted_out_at AS optedOutAt, tm.location_confirmed_at AS confirmedAt, tm.accepted_at AS acceptedAt
       FROM team_members tm
       JOIN users u ON u.id = tm.user_id
       LEFT JOIN locations l ON l.id = COALESCE(tm.location_id, u.location_id)
       LEFT JOIN locations pl ON pl.id = tm.pool_location_id
      WHERE tm.team_id = ?
      ORDER BY COALESCE(NULLIF(u.display_name, ''), u.username) COLLATE NOCASE`, teamId)
-    .map((m) => ({ ...m, name: m.display_name || m.username, optedOut: Boolean(m.opted_out), dnd: Boolean(m.dnd) }));
+    .map((m) => ({ ...m, name: m.display_name || m.username, optedOut: Boolean(m.opted_out), dnd: Boolean(m.dnd), accepted: Boolean(m.acceptedAt) }));
 }
 
 // The people who are actually playing.
@@ -313,12 +327,15 @@ function memberView(db, team, userId, day = today()) {
     const c = list.find((m) => m.userId === childId)
       || { userId: childId, name: userName(db, childId), locationName: null };
     const hintsRow = db.get('SELECT hints FROM users WHERE id = ?', childId);
+    // Their wishlist and hints are theirs to share: only once they said yes.
+    const saidYes = hasSaidYes(db, team.id, childId);
     child = {
       id: childId,
       name: c.name,
       location: c.locationName,
-      hints: parseHints(hintsRow && hintsRow.hints),
-      wishlist: wishlist(db, childId),
+      saidYes,
+      hints: saidYes ? parseHints(hintsRow && hintsRow.hints) : parseHints(null),
+      wishlist: saidYes ? wishlist(db, childId) : [],
       giftsGiven: db.all('SELECT * FROM gifts WHERE team_id = ? AND santa_id = ? AND child_id = ? ORDER BY given_on, id', team.id, userId, childId).map((g) => giftRow(g)),
       tasksGiven: db.all('SELECT * FROM tasks WHERE team_id = ? AND santa_id = ? AND child_id = ? ORDER BY id', team.id, userId, childId).map(taskRow),
       unread: db.get('SELECT COUNT(*) AS n FROM messages WHERE team_id = ? AND santa_id = ? AND child_id = ? AND from_santa = 0 AND read_at IS NULL', team.id, userId, childId).n,
@@ -328,7 +345,9 @@ function memberView(db, team, userId, day = today()) {
   const fromSanta = {
     gifts: db.all('SELECT * FROM gifts WHERE team_id = ? AND child_id = ? ORDER BY given_on, id', team.id, userId).map((g) => giftRow(g, { forChild: true })),
     tasks: db.all('SELECT * FROM tasks WHERE team_id = ? AND child_id = ? ORDER BY id', team.id, userId).map(taskRow),
-    unread: santaId ? db.get('SELECT COUNT(*) AS n FROM messages WHERE team_id = ? AND santa_id = ? AND child_id = ? AND from_santa = 1 AND read_at IS NULL', team.id, santaId, userId).n : 0,
+    // The child's side of the notes follows the child, not the current Santa
+    // (see routes/teams.js), so a change of Santa leaves no trace here.
+    unread: santaId ? db.get('SELECT COUNT(*) AS n FROM messages WHERE team_id = ? AND child_id = ? AND from_santa = 1 AND read_at IS NULL', team.id, userId).n : 0,
     hasSanta: Boolean(santaId),
     santaName: revealed && santaId ? userName(db, santaId) : null,
   };
@@ -342,6 +361,7 @@ function memberView(db, team, userId, day = today()) {
       locationName: me.locationName,
       optedOut: me.optedOut,
       confirmedAt: me.confirmedAt,
+      saidYes: me.accepted,
     },
     members: playing.map((m) => ({ id: m.userId, name: m.name, location: m.locationName })),
     sittingOut: list.length - playing.length,
@@ -393,7 +413,7 @@ function board(db, teamId, viewerId) {
 }
 
 module.exports = {
-  players, checkInOpen, reminderOffsets, summary, ownerWarnings,
+  players, checkInOpen, reminderOffsets, summary, ownerWarnings, secretGames, hasSaidYes, sayYes,
   HINT_KEYS, parseHints, getTeam, matchCount, phaseOf, isRevealed, members, exclusionPairs, analyse,
   activityCount, draw, undraw, removeFromCircle, insertIntoCircle, childOf, santaOf, wishlist,
   memberView, publicTeam, board, userName, giftRow, taskRow,

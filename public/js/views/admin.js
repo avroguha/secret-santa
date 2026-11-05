@@ -511,7 +511,7 @@ export async function outboxView(main, { isCurrent }) {
   if (!isCurrent()) return;
   const badge = { sent: 'ok', captured: 'gold', queued: 'blue', failed: 'error' };
   const draw = () => mount(main, html`
-    <div class="page-head"><div><h1>📮 Outbox</h1><p class="sub">Every email the app has written. Sign-in codes are stored blanked out.</p></div>
+    <div class="page-head"><div><h1>📮 Outbox</h1><p class="sub">Every email the app has written. ${o.sealed ? "Game emails are sealed - they can name who someone is Santa for - so only who, what and whether it arrived is shown." : "Demo mode: every email can be read here."} Sign-in codes are stored blanked out.</p></div>
       <div class="row">${o.counts.failed ? html`<button class="btn gold" data-act="retry">↻ Retry ${plural(o.counts.failed, 'failed email')}</button>` : ''}
         <button class="btn ghost" data-act="clear">🧹 Clear the log</button></div></div>
     ${adminNav('/admin/outbox')}
@@ -525,7 +525,7 @@ export async function outboxView(main, { isCurrent }) {
         <td class="nowrap">${fmtDateTime(r.createdAt)}</td><td>${r.toName ? html`${r.toName}<br>` : ''}<span class="muted">${r.to}</span></td>
         <td>${r.subject}${r.error ? html`<div class="muted" style="color:var(--error)">${r.error}</div>` : ''}</td>
         <td><span class="badge ${badge[r.status]}">${r.status === 'captured' ? 'demo' : r.status}</span></td>
-        <td><button class="btn link small" data-act="view" data-id="${r.id}">View</button></td></tr>`)}</tbody></table></div>`
+        <td>${r.sealed ? html`<span class="badge" title="Game emails are never shown to anyone but the person they were sent to">🔒 sealed</span>` : html`<button class="btn link small" data-act="view" data-id="${r.id}">View</button>`}</td></tr>`)}</tbody></table></div>`
     : html`<div class="card empty"><span class="big-emoji">📭</span>No emails here.</div>`}`);
   draw();
   const reload = async () => { o = await api.get(`/api/admin/outbox${status ? `?status=${status}` : ''}`); draw(); };
@@ -612,11 +612,11 @@ export async function gamesView(main, { isCurrent }) {
   actions(main, {
     owner: async (d) => {
       const g = games.find((x) => String(x.id) === d.id);
-      const people = (await api.get('/api/admin/users')).filter((u) => u.active);
+      const people = (await api.get('/api/admin/users')).filter((u) => u.active && u.role !== 'admin');
       const ok = await formModal({
         title: `🎄 New organiser for ${g.name}`,
         submit: 'Hand it over',
-        body: html`<p class="muted">The new organiser runs the game from their home page. If they also play in it, they'll be asked to accept that they can see the Santa list.</p>
+        body: html`<p class="muted">The new organiser runs the game from their home page. If they also play in it, they'll be asked to accept that they can see the Santa list. Admin accounts can't organise games, and once names are drawn the game can only go to someone who plays in it.</p>
           <div class="field"><label for="no">New organiser</label><select id="no" name="userId">${people.map((u) => html`<option value="${u.id}" ${g.owner && g.owner.id === u.id ? 'selected' : ''}>${u.name}${u.email ? ` (${u.email})` : ''}</option>`)}</select></div>`,
         onSubmit: (v) => api.put(`/api/admin/games/${g.id}/owner`, { userId: v.userId }),
       });
