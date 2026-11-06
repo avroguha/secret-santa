@@ -15,11 +15,17 @@ const A = { auth: 'admin' };
 module.exports = function adminRoutes(router, app) {
   const { db, config } = app;
 
+  // All a platform admin ever sees of a game.
+  const gameFacts = (s) => ({
+    id: s.id, name: s.name, owner: s.owner, phase: s.phase, startDate: s.startDate, endDate: s.endDate,
+    memberCount: s.memberCount, joinOpen: s.joinOpen, createdAt: s.createdAt,
+  });
+
   // ---- overview -------------------------------------------------------------------
   router.get('/api/admin/overview', () => {
     const day = today();
     const count = (sql, ...p) => db.get(sql, ...p).n;
-    const teams = db.all('SELECT * FROM teams ORDER BY start_date DESC').map((t) => T.summary(db, t, day));
+    const teams = db.all('SELECT * FROM teams ORDER BY start_date DESC').map((t) => gameFacts(T.summary(db, t, day)));
     const warnings = [];
     if (!app.mailer.isConfigured()) {
       warnings.push(config.demo.enabled
@@ -65,14 +71,12 @@ module.exports = function adminRoutes(router, app) {
     hasPassword: Boolean(u.password_hash),
     dnd: Boolean(u.dnd),
     source: u.source,
-    teams: u.teams || '',
     lastLoginAt: u.last_login_at,
     createdAt: u.created_at,
   });
 
   const USER_SQL = `
-    SELECT u.*, l.name AS location_name,
-           (SELECT group_concat(t.name, ', ') FROM team_members tm JOIN teams t ON t.id = tm.team_id WHERE tm.user_id = u.id) AS teams
+    SELECT u.*, l.name AS location_name
       FROM users u LEFT JOIN locations l ON l.id = u.location_id`;
 
   router.get('/api/admin/users', (ctx) => {
@@ -87,10 +91,6 @@ module.exports = function adminRoutes(router, app) {
     if (ctx.query.locationId) {
       where.push('u.location_id = ?');
       args.push(id(ctx.query.locationId));
-    }
-    if (ctx.query.notInTeam) {
-      where.push('NOT EXISTS (SELECT 1 FROM team_members x WHERE x.user_id = u.id AND x.team_id = ?)');
-      args.push(id(ctx.query.notInTeam));
     }
     const sql = `${USER_SQL} ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY u.active DESC, COALESCE(NULLIF(u.display_name, ''), u.username) COLLATE NOCASE LIMIT 2000`;
     return db.all(sql, ...args).map(userRow);
@@ -107,6 +107,11 @@ module.exports = function adminRoutes(router, app) {
     if (existing && (existing.email || '') !== (f.email || '')) {
       const secret = T.secretGames(db, existing.id);
       if (secret.length) throw fail(409, `${existing.username} is in the Santa circle of ${secret.map((t) => t.name).join(', ')}. Changing their email would let someone else sign in as them and see their match, so it waits until the Santas are revealed.`);
+    }
+    if (existing && role === 'admin' && existing.role !== 'admin') {
+      const games = db.all(`SELECT DISTINCT t.name FROM teams t LEFT JOIN team_members tm ON tm.team_id = t.id AND tm.user_id = ?
+                             WHERE (t.owner_id = ? OR tm.user_id IS NOT NULL) AND t.end_date >= ?`, existing.id, existing.id, today());
+      if (games.length) throw fail(409, `${existing.username} is in ${games.map((g) => g.name).join(', ')}. Admin accounts can't be in games, so give them a separate admin account instead.`);
     }
     const clash = db.get('SELECT id, username FROM users WHERE (email = ? OR (external_id IS NOT NULL AND external_id = ?)) AND id <> ?',
       f.email || '', f.externalId || '', existing ? existing.id : 0);
@@ -143,9 +148,11 @@ module.exports = function adminRoutes(router, app) {
     const u = db.get('SELECT * FROM users WHERE id = ?', id(ctx.params.userId));
     if (!u) throw fail(404, 'No such person');
     if (u.id === ctx.user.id) throw fail(400, "You can't delete yourself");
-    const notes = U.deleteUser(db, u.id);
+    // How their circles were repaired names who was paired with whom: not for the admin.
+    // An organiser left with someone unmatched sees it on their own game.
+    U.deleteUser(db, u.id);
     app.audit(ctx, 'deleted a person', `${u.username} <${u.email || '-'}>`);
-    return { ok: true, notes };
+    return { ok: true };
   }, A);
 
   router.post('/api/admin/users/:userId/password', (ctx) => {
@@ -186,8 +193,8 @@ module.exports = function adminRoutes(router, app) {
   router.get('/api/admin/users/export.csv', (ctx) => {
     const rows = db.all(`${USER_SQL} ORDER BY u.username COLLATE NOCASE`).map(userRow);
     const body = toCsv([
-      ['userName', 'ID', 'email', 'displayName', 'location', 'teams', 'role', 'active', 'lastLogin'],
-      ...rows.map((u) => [u.username, u.externalId || '', u.email || '', u.displayName || '', u.locationName || '', u.teams, u.role, u.active ? 'yes' : 'no', u.lastLoginAt || '']),
+      ['userName', 'ID', 'email', 'displayName', 'location', 'role', 'active', 'lastLogin'],
+      ...rows.map((u) => [u.username, u.externalId || '', u.email || '', u.displayName || '', u.locationName || '', u.role, u.active ? 'yes' : 'no', u.lastLoginAt || '']),
     ]);
     sendText(ctx.res, 200, body, 'text/csv; charset=utf-8', { 'content-disposition': 'attachment; filename="secret-santa-people.csv"' });
   }, A);
@@ -237,13 +244,7 @@ module.exports = function adminRoutes(router, app) {
 
   // ---- games (platform view) ---------------------------------------------------------------
   // The list of every game and who runs it. No draw, no Santa list, no players' data here.
-  router.get('/api/admin/games', () => db.all('SELECT * FROM teams ORDER BY created_at DESC').map((t) => {
-    const s = T.summary(db, t);
-    return {
-      id: s.id, name: s.name, owner: s.owner, phase: s.phase, startDate: s.startDate, endDate: s.endDate,
-      memberCount: s.memberCount, sittingOut: s.sittingOut, joinOpen: s.joinOpen, createdAt: s.createdAt,
-    };
-  }), A);
+  router.get('/api/admin/games', () => db.all('SELECT * FROM teams ORDER BY created_at DESC').map((t) => gameFacts(T.summary(db, t))), A);
 
   router.put('/api/admin/games/:teamId/owner', (ctx) => {
     const team = T.getTeam(db, id(ctx.params.teamId, 'game'));
@@ -251,13 +252,13 @@ module.exports = function adminRoutes(router, app) {
     const u = db.get('SELECT * FROM users WHERE id = ? AND active = 1', uid);
     if (!u) throw fail(400, 'Pick an active person as the new owner');
     // The platform admin runs the platform, not games: an organiser sees the
-    // whole Santa list, so an admin account can never be handed one - and once
-    // names are drawn (and still secret) only someone already playing in it can
-    // take over, so the admin cannot invent an account to read the list either.
+    // whole Santa list, so an admin account can never be handed one - and a game
+    // with players only goes to one of them, so the admin cannot invent an
+    // account to take it over either.
     if (u.role === 'admin') throw fail(400, 'An admin account cannot organise a game - pick a player');
-    const drawnSecret = T.matchCount(db, team.id) > 0 && !T.isRevealed(team);
-    if (drawnSecret && !db.get('SELECT 1 FROM team_members WHERE team_id = ? AND user_id = ? AND opted_out = 0', team.id, uid)) {
-      throw fail(400, 'Names are drawn and still secret, so the game can only go to someone who plays in it');
+    const hasPlayers = db.get('SELECT 1 FROM team_members WHERE team_id = ? AND opted_out = 0 LIMIT 1', team.id);
+    if (hasPlayers && !db.get('SELECT 1 FROM team_members WHERE team_id = ? AND user_id = ? AND opted_out = 0', team.id, uid)) {
+      throw fail(400, 'This game has players, so it can only go to someone who plays in it');
     }
     // A new owner who also plays has not accepted the spoiler: ask them again.
     const plays = db.get('SELECT 1 FROM team_members WHERE team_id = ? AND user_id = ?', team.id, uid);
@@ -413,8 +414,23 @@ module.exports = function adminRoutes(router, app) {
     const counts = Object.fromEntries(db.all('SELECT status, COUNT(*) AS n FROM outbox GROUP BY status').map((r) => [r.status, r.n]));
     return {
       counts,
-      sealed: !config.demo.enabled,
-      rows: rows.map((r) => ({ id: r.id, to: r.to_email, toName: r.to_name, subject: r.subject, kind: r.kind, status: r.status, attempts: r.attempts, error: r.error, createdAt: r.created_at, sentAt: r.sent_at, sealed: isSealed(r.kind, config.demo.enabled) })),
+      rows: rows.map((r) => {
+        const sealed = isSealed(r.kind);
+        return {
+          id: r.id,
+          to: sealed ? '' : r.to_email,
+          toName: sealed ? '' : r.to_name,
+          subject: r.subject,
+          kind: r.kind,
+          status: r.status,
+          attempts: r.attempts,
+          // A relay's error text often quotes the address it refused.
+          error: sealed ? r.error.replace(/[^\s<>"']+@[^\s<>"']+/g, '(address hidden)') : r.error,
+          createdAt: r.created_at,
+          sentAt: r.sent_at,
+          sealed,
+        };
+      }),
     };
   }, A);
 
@@ -428,12 +444,12 @@ module.exports = function adminRoutes(router, app) {
     const r = db.get('SELECT html, kind FROM outbox WHERE id = ?', id(ctx.params.mailId));
     if (!r) throw fail(404, 'No such email');
     // A game email can name someone's Secret Santa child: its body is not for the admin.
-    if (isSealed(r.kind, config.demo.enabled)) {
+    if (isSealed(r.kind)) {
       r.html = `<!doctype html><meta charset="utf-8"><body style="font-family:system-ui,sans-serif;padding:24px;line-height:1.5;color:#333">
         <h2 style="margin:0 0 8px">🔒 Sealed</h2>
-        <p>Game emails can name who someone is Secret Santa for, so their contents are never shown here - not even to an admin.
-        This list still shows who each email went to and whether it was delivered.</p>
-        <p>To see what an email looks like, use <b>Email &gt; Previews</b>, which fills each template with made-up names.</p></body>`;
+        <p>Game emails could give away who is whose Santa, so who received them and what they say are never shown here - not even to an admin.
+        This list still shows that each one exists and whether it was delivered.</p>
+        <p>To see what an email looks like, use the previews on the <b>Email</b> page, which fill each template with made-up names.</p></body>`;
     }
     ctx.res.removeHeader('content-security-policy');
     ctx.res.removeHeader('x-frame-options');

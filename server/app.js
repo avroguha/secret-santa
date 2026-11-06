@@ -111,6 +111,7 @@ function createApp(config) {
     perUser: 900, // requests per signed-in person per 5 minutes
     refusals: 40, // 403 / 404 answers per person (or IP) per 10 minutes
   };
+  const GAME_ROUTES = /^\/api\/(teams|manage|join)(\/|$)|^\/api\/(directory|me\/teams)\/?$/;
   const tooMany = (key, message) => {
     const wait = app.auth.limiter.retryAfter(key);
     return new HttpError(429, message || `Slow down a little - try again in ${wait} seconds`, { retryAfter: wait });
@@ -171,6 +172,12 @@ function createApp(config) {
         if (ctx.user.must_change_password && !config.demo.enabled && !opts.allowPasswordChange) {
           throw new HttpError(403, 'Choose a new password first', { code: 'password_change_required' });
         }
+      }
+      // Two separate roles. An admin account runs the platform and has no games:
+      // it cannot create, join, play in, organise or open one. Checked here, by
+      // path, so a route added later under these prefixes is covered too.
+      if (ctx.user && ctx.user.role === 'admin' && GAME_ROUTES.test(p)) {
+        throw new HttpError(403, 'Admin accounts run the platform, not games - sign in with your own player account to play or organise', { code: 'admin_no_games' });
       }
       if (ctx.user && ctx.user.role === 'admin' && ctx.origin) adminOrigin = ctx.origin;
       if (!MUTATING.has(req.method)) ctx.body = {};

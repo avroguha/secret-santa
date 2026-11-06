@@ -29,6 +29,22 @@ test('demo on: made-up data, the simple code works, nothing is emailed', async (
     const o = await a.get('/api/admin/outbox');
     assert.ok(o.body.rows.length > 0);
     assert.ok(o.body.rows.every((m) => m.status === 'captured'), 'demo emails are kept, never sent');
+    // The two roles hold in the demo too: nobody is both, and game emails are sealed.
+    assert.ok(people.filter((p) => p.role === 'admin').every((p) => !p.teams), 'no demo admin is in a game');
+    const noelle = await env.client().init();
+    await noelle.post('/api/auth/otp/request', { email: 'noelle.winters@example.com' });
+    assert.equal((await noelle.post('/api/auth/otp/verify', { email: 'noelle.winters@example.com', code: '424242' })).status, 200);
+    const game = (await noelle.get('/api/manage/teams')).body.find((t) => t.name === 'Workshop Elves');
+    assert.equal((await noelle.get(`/api/manage/teams/${game.id}/matches`)).status, 200, 'the organiser sees the pairs');
+    assert.equal((await noelle.post(`/api/manage/teams/${game.id}/notify`, { kind: 'matched' })).status, 200);
+    assert.equal((await a.get(`/api/manage/teams/${game.id}/matches`)).status, 403, 'the admin does not');
+    const after = (await a.get('/api/admin/outbox')).body.rows;
+    const matched = after.filter((m) => m.kind === 'matched');
+    assert.ok(matched.length > 0);
+    for (const m of matched) {
+      assert.deepEqual([m.to, m.toName, m.sealed], ['', '', true]);
+      assert.match((await a.get(`/api/admin/outbox/${m.id}/html`)).text, /Sealed/);
+    }
     assert.ok(fs.existsSync(path.join(dir, 'demo.sqlite')));
   } finally {
     await env.close();

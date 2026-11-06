@@ -153,7 +153,7 @@ function membersTab(d, locations) {
     <div class="section-title"><h2>👥 Players <span class="muted" style="font-size:1rem">(${playing}${d.sittingOut.length ? ` + ${d.sittingOut.length} sitting out` : ''})</span></h2>
       <button class="btn red" data-act="add-members">+ Add players</button></div>
     ${d.unmatched.length ? html`<div class="alert warn"><span class="ico">🆕</span><div>${plural(d.unmatched.length, 'player joined', 'players joined')} after the draw and ${d.unmatched.length === 1 ? 'is' : 'are'} not in the circle yet. Use <b>Insert</b> to slot them in without redrawing everyone - only one Santa's child changes.</div></div>` : ''}
-    ${d.members.length ? html`<div class="table-wrap"><table class="table stack">
+    ${d.members.length ? html`<div class="table-wrap"><table class="table table-cards">
       <thead><tr><th>Player</th><th>Plays from</th><th>Drawn with</th>${drawn ? '' : html`<th>Check-in</th>`}<th>Said yes</th><th>Wishlist</th>${drawn ? html`<th>Circle</th>` : ''}<th></th></tr></thead>
       <tbody>${d.members.map((m) => html`<tr class="${m.optedOut ? 'row-out' : ''}">
         <td class="first"><div class="row" style="flex-wrap:nowrap">${avatar(m.name, { cls: 'tiny' })}<div><b>${m.name}</b>
@@ -218,7 +218,7 @@ function drawTab(d, matches) {
         <p class="muted">So far: ${plural(d.activity.gifts, 'gift')} (${d.stats.finals} final, ${d.stats.received} received), ${plural(d.activity.tasks, 'task')} (${d.stats.tasksDone} done), ${plural(d.activity.messages, 'note')}.</p>
         <h3>📣 Email the team</h3>
         <div class="row">
-          <button class="btn small" data-act="notify" data-kind="matched">🎅 Remind every Santa of their child</button>
+          <button class="btn small" data-act="notify" data-kind="matched">🎅 Remind every Santa they're matched</button>
           <button class="btn small ghost" data-act="notify" data-kind="reminder">⏰ Wishlist reminder</button>
           <button class="btn small ghost" data-act="notify" data-kind="start">🎄 "Game on!"</button>
         </div>
@@ -241,7 +241,7 @@ function drawTab(d, matches) {
         ${d.team.ownerPlays ? html`<div class="alert gold"><span class="ico">🙈</span><div>You play in this game, so this list includes <b>your own Santa</b>. Peek only if you need to.</div></div>` : ''}
         ${matches ? html`
           <p class="muted">Blurred so you don't spoil it for yourself. Every look is written to the audit log.</p>
-          <div class="table-wrap"><table class="table stack"><thead><tr><th>Santa 🎁→ child</th><th class="num">Gifts</th><th class="num">Tasks</th></tr></thead>
+          <div class="table-wrap"><table class="table table-cards"><thead><tr><th>Santa 🎁→ child</th><th class="num">Gifts</th><th class="num">Tasks</th></tr></thead>
             <tbody>${matches.rows.map((r) => html`<tr><td class="first"><span class="sealed">${r.santa}</span> 🎁→ <span class="sealed">${r.child}</span></td><td data-label="Gifts" class="num">${r.gifts}${r.final ? ' 🏆' : ''}</td><td data-label="Tasks" class="num">${r.tasks}</td></tr>`)}</tbody></table></div>`
     : html`<p class="muted">Who is whose Santa is a secret - even from you, unless you choose to look. Looking is recorded in the audit log.</p>
           <button class="btn ghost" data-act="load-matches">👀 Show the Santa list</button>`}
@@ -459,7 +459,7 @@ export async function manageView(main, { params, isCurrent }) {
       if (!await confirmBox(`Remove ${m.name} from ${d.team.name}?`, {
         ok: 'Remove',
         danger: true,
-        detail: drawn ? `Their Santa takes over their child, so the circle stays whole (that Santa gets an email about their new child).` : '',
+        detail: drawn ? `Their Santa takes over their child, so the circle stays whole (that Santa is told by email, without the name).` : '',
       })) return;
       const r = await api.del(`${base}/members/${m.id}`);
       d = r.detail;
@@ -504,7 +504,7 @@ export async function manageView(main, { params, isCurrent }) {
         body: html`
           ${redraw ? html`<div class="alert error"><span class="ico">⚠️</span><div>Everybody gets a new child, and the ${plural(d.activity.total, 'gift, task and note', 'gifts, tasks and notes')} logged so far are erased.</div></div>` : ''}
           <p>${plural(d.members.length, 'player')} will be matched ${d.team.matchScope === 'all' ? 'all together' : `within ${plural(d.pools.length, 'group')}`}, respecting ${plural(d.exclusions.length, 'exclusion')}.</p>
-          <label class="check"><input type="checkbox" name="notify" checked> Email every Santa who their child is</label>`,
+          <label class="check"><input type="checkbox" name="notify" checked> Email every Santa that they've been matched (the name stays in the app)</label>`,
         onSubmit: (v) => api.post(`${base}/draw`, { notify: v.notify, redraw }),
       });
       if (out && out.team) {
@@ -534,7 +534,7 @@ export async function manageView(main, { params, isCurrent }) {
     },
     seal: () => { matches.open = !matches.open; draw(); },
     notify: async (ds) => {
-      const labels = { matched: 'remind every Santa who their child is', reminder: 'send everyone a wishlist reminder', start: 'tell everyone the game is on' };
+      const labels = { matched: 'remind every Santa they have a child waiting in the app', reminder: 'send everyone a wishlist reminder', start: 'tell everyone the game is on' };
       if (!await confirmBox(`Email the team to ${labels[ds.kind]}?`, { ok: 'Send' })) return;
       const r = await api.post(`${base}/notify`, { kind: ds.kind });
       toast(`${plural(r.mailed, 'email')} queued ✉️`, 'ok');

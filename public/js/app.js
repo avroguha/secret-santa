@@ -16,15 +16,15 @@ export const state = { session: null };
 const ROUTES = [
   ['/login', loginView, { public: true }],
   ['/password', passwordView, { allowPasswordChange: true }],
-  ['/', homeView],
-  ['/team/:id', teamView],
-  ['/team/:id/:tab', teamView],
-  ['/wishlist', wishlistView],
+  ['/', homeView, { player: true }],
+  ['/team/:id', teamView, { player: true }],
+  ['/team/:id/:tab', teamView, { player: true }],
+  ['/wishlist', wishlistView, { player: true }],
   ['/profile', profileView],
   ['/guide', guideView],
-  ['/manage/:id', manageView],
-  ['/manage/:id/:tab', manageView],
-  ['/join/:code', joinView],
+  ['/manage/:id', manageView, { player: true }],
+  ['/manage/:id/:tab', manageView, { player: true }],
+  ['/join/:code', joinView, { player: true }],
   ['/admin', admin.overviewView, { admin: true }],
   ['/admin/users', admin.usersView, { admin: true }],
   ['/admin/import', admin.importView, { admin: true }],
@@ -95,11 +95,13 @@ function renderChrome(route) {
         <a class="brand" href="#/">${hat}<span>${s.appTitle}</span></a>
         <nav class="nav" id="nav">
           ${showNav ? html`
-            <a href="#/" class="${active('/', true) || active('/team') || active('/manage') || active('/join')}">🎄 My games</a>
-            <a href="#/wishlist" class="${active('/wishlist')}">🎁 Wishlist</a>
-            <a href="#/profile" class="${active('/profile')}">⭐ About me</a>
-            <a href="#/guide" class="${active('/guide')}">📜 How to play</a>
-            ${u.role === 'admin' ? html`<a href="#/admin" class="${active('/admin')}">🧝 Admin</a>` : ''}` : ''}
+            ${u.role === 'admin' ? html`
+              <a href="#/admin" class="${active('/admin')}">🧝 Admin</a>
+              <a href="#/guide" class="${active('/guide')}">📜 How to play</a>` : html`
+              <a href="#/" class="${active('/', true) || active('/team') || active('/manage') || active('/join')}">🎄 My games</a>
+              <a href="#/wishlist" class="${active('/wishlist')}">🎁 Wishlist</a>
+              <a href="#/profile" class="${active('/profile')}">⭐ About me</a>
+              <a href="#/guide" class="${active('/guide')}">📜 How to play</a>`}` : ''}
         </nav>
         <div class="top-actions">
           <button class="icon-btn" data-act="snow" title="Snow on/off" aria-label="Falling snow" aria-pressed="${document.querySelector('canvas.snow') ? 'true' : 'false'}">❄️</button>
@@ -109,7 +111,7 @@ function renderChrome(route) {
               <button class="user-chip" data-act="menu" aria-haspopup="true">${avatar(u.name)}<span class="uname">${u.name.split(' ')[0]}</span><span class="caret">▾</span></button>
               <div class="menu-panel" role="menu">
                 <div class="who"><b>${u.name}</b><br><span class="muted">${u.email || u.username}</span></div>
-                <a href="#/profile" role="menuitem">⭐ About me</a>
+                ${u.role === 'admin' ? '' : html`<a href="#/profile" role="menuitem">⭐ About me</a>`}
                 ${u.hasPassword ? html`<a href="#/password" role="menuitem">🔑 Change password</a>` : ''}
                 <button data-act="logout" role="menuitem">🚪 Sign out</button>
               </div>
@@ -171,6 +173,12 @@ export async function render() {
   }
   if (u && u.mustChangePassword && !s.demo.enabled && !route.opts.allowPasswordChange && !route.opts.public) {
     location.replace('#/password');
+    return;
+  }
+  // Two separate roles: an admin account runs the platform and has no games.
+  if (route.opts.player && u.role === 'admin') {
+    if (!['/', '/wishlist'].includes(route.path)) toast('Admin accounts run the platform, not games - sign in with your own player account to play or organise', 'error');
+    location.replace('#/admin');
     return;
   }
   if (route.opts.admin && u.role !== 'admin') {

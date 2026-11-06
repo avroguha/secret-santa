@@ -43,20 +43,15 @@ function create(app) {
   const matchedOne = guard((team, santaId, childId) => {
     const { appTitle, base, profileLink } = ctx();
     const santa = user(santaId);
-    const child = user(childId);
-    if (!santa || !child) return 0;
-    const loc = T.members(db, team.id).find((m) => m.userId === childId);
+    if (!santa || !user(childId)) return 0;
     return send('matched', santa, emails.matched({
       appTitle,
       profileLink,
       santaName: nameOf(santa),
-      childName: nameOf(child),
-      childLocation: loc && loc.locationName,
       teamName: team.name,
       budget: team.budget,
       startDate: team.start_date,
       endDate: team.end_date,
-      wishlist: T.hasSaidYes(db, team.id, childId) ? T.wishlist(db, childId) : [],
       link: teamLink(base, team.id, 'child'),
     }));
   });
@@ -71,10 +66,8 @@ function create(app) {
     const { appTitle, base, profileLink } = ctx();
     let n = 0;
     for (const m of playing(team.id)) {
-      const childId = T.childOf(db, team.id, m.userId);
       n += send('start', user(m.userId), emails.start({
-        appTitle, profileLink, name: m.name, teamName: team.name, endDate: team.end_date,
-        childName: childId ? T.userName(db, childId) : '', link: teamLink(base, team.id),
+        appTitle, profileLink, name: m.name, teamName: team.name, endDate: team.end_date, link: teamLink(base, team.id),
       }));
     }
     return n;
@@ -129,7 +122,7 @@ function create(app) {
     for (const t of giftTargets(team)) {
       const santa = user(t.santa_id);
       n += send('giftReminder', santa, emails.giftReminder({
-        appTitle, profileLink, name: nameOf(santa), teamName: team.name, childName: T.userName(db, t.child_id),
+        appTitle, profileLink, name: nameOf(santa), teamName: team.name,
         endDate: team.end_date, daysLeft, giftsSoFar: t.gifts, link: teamLink(base, team.id, 'child'),
       }));
     }
@@ -159,9 +152,9 @@ function create(app) {
     const { appTitle, base, profileLink } = ctx();
     const toId = msg.from_santa ? msg.child_id : msg.santa_id;
     const to = user(toId);
-    const fromLabel = msg.from_santa ? 'your Secret Santa' : `${T.userName(db, msg.child_id)} (your child)`;
+    const fromLabel = msg.from_santa ? 'your Secret Santa' : 'your child';
     return send('message', to, emails.message({
-      appTitle, profileLink, toName: nameOf(to), fromLabel, subjectFrom: msg.from_santa ? 'your Secret Santa' : 'your child', teamName: team.name, body: msg.body,
+      appTitle, profileLink, toName: nameOf(to), fromLabel, teamName: team.name, body: msg.body,
       link: teamLink(base, team.id, msg.from_santa ? 'santa' : 'child'),
     }));
   });

@@ -348,10 +348,10 @@ test('the platform admin cannot learn who is whose Santa - not from the outbox, 
       const one = (await admin.get(`/api/admin/outbox/${m.id}/html`)).text;
       if (one.includes(child.name)) leaks.push(`mail ${m.id} to ${santa.name} names ${child.name}`);
     }
-    // The list shows each email's recipient, kind and subject; none addressed
-    // to this Santa may carry the child's name.
-    for (const r of list.body.rows.filter((x) => x.to === santa.email)) {
-      if (JSON.stringify(r).includes(child.name)) leaks.push(`outbox row ${r.id} to ${santa.name} names ${child.name}`);
+    // The list carries no recipient of a game email, nor the child's name in one.
+    for (const r of list.body.rows.filter((x) => x.sealed)) {
+      if (r.to || r.toName) leaks.push(`outbox row ${r.id} (${r.kind}) names its recipient`);
+      if (JSON.stringify(r).includes(child.name)) leaks.push(`outbox row ${r.id} names ${child.name}`);
     }
   }
   assert.deepEqual(leaks, [], 'the admin can read a pairing from the outbox');
@@ -469,6 +469,126 @@ test('Microsoft sign-in refuses a multi-tenant authority', async () => {
       assert.equal(app.azure.status().configured, false, tenant);
     } finally { app.stop(); }
   }
+});
+
+test('no email to a Santa says who their child is - not the match, the start, a reminder or a note', async () => {
+  const sent = [];
+  const { mailer } = env.app;
+  const original = mailer.enqueue.bind(mailer);
+  mailer.enqueue = (msg) => { sent.push(msg); return original(msg); };
+  try {
+    const c = P.Olga.c;
+    env.app.auth.limiter.clear(`team-mail:${A.team}`);
+    assert.equal((await c.post(`/api/manage/teams/${A.team}/draw`, { redraw: true, notify: true })).status, 200);
+    assert.equal((await c.post(`/api/manage/teams/${A.team}/notify`, { kind: 'start' })).status, 200);
+    assert.equal((await c.post(`/api/manage/teams/${A.team}/remind`, { kind: 'gift' })).status, 200);
+    for (const n of ['Pete', 'Quinn', 'Rosa', 'Sam']) {
+      assert.equal((await P[n].c.post(`/api/teams/${A.team}/messages/santa`, { body: 'hello Santa' })).status, 200);
+    }
+  } finally {
+    mailer.enqueue = original;
+  }
+  assert.deepEqual([...new Set(sent.map((m) => m.kind))].sort(), ['giftReminder', 'matched', 'message', 'start']);
+  const leaks = [];
+  for (const { santa_id: santa, child_id: child } of db().all('SELECT santa_id, child_id FROM matches WHERE team_id = ?', A.team)) {
+    const childName = byId(child).name;
+    for (const m of sent.filter((x) => x.to === byId(santa).email)) {
+      if ([m.subject, m.html, m.text].join(' ').includes(childName)) leaks.push(`${m.kind} to ${byId(santa).name} names ${childName}`);
+    }
+  }
+  assert.deepEqual(leaks, []);
+  const match = sent.find((m) => m.kind === 'matched');
+  assert.match(match.subject, /matched/);
+  assert.match(match.text, /matched with your child/);
+  assert.doesNotMatch(match.html, /ROSA-SECRET|SAM-SECRET/, 'no wishlist either');
+});
+
+// ---- two separate roles -------------------------------------------------------------
+
+const GAME_ID_KEYS = ['createdAt', 'endDate', 'id', 'joinOpen', 'memberCount', 'name', 'owner', 'phase', 'startDate'];
+
+test('two separate roles: the organiser sees the pairs, an admin account sees nothing of the game', async () => {
+  const pairs = db().all('SELECT santa_id, child_id FROM matches WHERE team_id = ?', A.team);
+  const list = await P.Olga.c.get(`/api/manage/teams/${A.team}/matches`);
+  assert.equal(list.status, 200, 'the organiser opens the Santa list');
+  assert.equal(list.body.length, pairs.length);
+  assert.deepEqual(list.body.map((r) => r.santa).sort(), pairs.map((p) => byId(p.santa_id).name).sort());
+
+  const code = db().get('SELECT invite_code FROM teams WHERE id = ?', A.team).invite_code;
+  for (const [method, url] of [
+    ['GET', `/api/manage/teams/${A.team}/matches`], ['GET', `/api/manage/teams/${A.team}`], ['GET', '/api/manage/teams'], ['POST', '/api/manage/teams'],
+    ['GET', `/api/teams/${A.team}`], ['GET', `/api/teams/${A.team}/board`], ['GET', '/api/me/teams'], ['GET', '/api/directory?q=Test'],
+    ['GET', `/api/join/${code}`], ['POST', `/api/join/${code}`], ['POST', `/api/teams/${A.team}/join`],
+  ]) {
+    const r = await admin.req(method, url, method === 'POST' ? { name: 'Admin Game', startDate: today(), endDate: addDays(today(), 3), matchScope: 'all' } : undefined);
+    assert.equal(r.status, 403, `${method} ${url}`);
+    assert.equal(r.body.details.code, 'admin_no_games', `${method} ${url}`);
+  }
+  assert.equal(db().get("SELECT COUNT(*) AS n FROM teams WHERE name = 'Admin Game'").n, 0);
+});
+
+test('what the admin sees of a game is a short list of facts - never who plays', async () => {
+  const games = (await admin.get('/api/admin/games')).body;
+  const overview = (await admin.get('/api/admin/overview')).body;
+  assert.ok(games.length >= 2 && overview.teams.length >= 2);
+  for (const g of [...games, ...overview.teams]) assert.deepEqual(Object.keys(g).sort(), GAME_ID_KEYS);
+  const people = await admin.get('/api/admin/users');
+  for (const u of people.body) assert.equal('teams' in u, false);
+  assert.equal(people.text.includes('Game A'), false, 'the people list names no game');
+  const filtered = await admin.get(`/api/admin/users?notInTeam=${A.team}`);
+  assert.equal(filtered.body.length, people.body.length, 'and cannot be filtered by who plays where');
+  const csv = await admin.get('/api/admin/users/export.csv');
+  assert.equal(csv.status, 200);
+  assert.equal(csv.text.includes('Game A'), false, 'nor does the export');
+});
+
+test('an admin account is never in a game, and someone in a running game cannot become one', async () => {
+  const add = async (name, role, locationId) => (await admin.post('/api/admin/users', {
+    username: `${name} Test`, externalId: `AT-${name}`, email: `${name.toLowerCase()}@attack.example`, locationId, role,
+  })).body.id;
+  const isle = (await admin.post('/api/admin/locations', { name: 'Elf Island' })).body.id
+    || (await admin.get('/api/locations')).body.find((l) => l.name === 'Elf Island').id;
+  const ada = await add('Ada', 'admin', isle);
+  const bea = await add('Bea', 'user', isle);
+  const cal = await add('Cal', 'user', isle);
+  assert.deepEqual((await P.Olga.c.get('/api/directory?q=Ada')).body, [], 'the people search does not offer admins');
+  const game = (await P.Olga.c.post('/api/manage/teams', { name: 'Game C', startDate: addDays(today(), 2), endDate: addDays(today(), 9), matchScope: 'all' })).body.id;
+  const direct = await P.Olga.c.post(`/api/manage/teams/${game}/members`, { userIds: [ada, bea] });
+  assert.equal(direct.body.added, 1, 'only Bea');
+  assert.equal(db().get('SELECT 1 FROM team_members WHERE team_id = ? AND user_id = ?', game, ada), undefined);
+  const bulk = await P.Olga.c.post(`/api/manage/teams/${game}/members`, { allFromLocations: [isle] });
+  assert.equal(bulk.body.added, 1, 'adding a whole location skips the admin too: only Cal is new');
+  // Promotion.
+  const cal2 = db().get('SELECT * FROM users WHERE id = ?', cal);
+  const promote = (u) => admin.put(`/api/admin/users/${u.id}`, { username: u.username, email: u.email, externalId: u.external_id, locationId: u.location_id, role: 'admin' });
+  const refused = await promote(cal2);
+  assert.equal(refused.status, 409, 'Cal plays in a running game');
+  assert.equal(db().get('SELECT role FROM users WHERE id = ?', cal).role, 'user');
+  const olga = db().get('SELECT * FROM users WHERE id = ?', P.Olga.id);
+  assert.equal((await promote(olga)).status, 409, 'Olga organises one');
+  const dee = await add('Dee', 'user', isle);
+  assert.equal((await promote(db().get('SELECT * FROM users WHERE id = ?', dee))).status, 200, 'Dee is in nothing');
+});
+
+test('deleting a person tells the admin nothing about who they were paired with', async () => {
+  const add = async (name) => (await admin.post('/api/admin/users', { username: `${name} Test`, externalId: `AT-${name}`, email: `${name.toLowerCase()}@attack.example`, locationId: A.loc })).body.id;
+  const tia = await add('Tia');
+  const uri = await add('Uri');
+  const game = (await P.Olga.c.post('/api/manage/teams', { name: 'Game D', startDate: today(), endDate: addDays(today(), 9), matchScope: 'all', minGroupSize: 2 })).body.id;
+  await P.Olga.c.post(`/api/manage/teams/${game}/members`, { userIds: [tia, uri] });
+  assert.equal((await P.Olga.c.post(`/api/manage/teams/${game}/draw`, {})).status, 200);
+  const r = await admin.del(`/api/admin/users/${tia}`);
+  assert.equal(r.status, 200);
+  assert.equal(r.text.includes('Uri'), false, r.text);
+  assert.deepEqual(r.body, { ok: true });
+});
+
+test('a relay error on a game email does not give the recipient away', async () => {
+  db().run(`INSERT INTO outbox (to_email, to_name, subject, html, text, kind, status, attempts, error, created_at)
+             VALUES ('hidden@attack.example', 'Hidden', 'x', '', '', 'matched', 'failed', 3, '550 <hidden@attack.example> no such user', ?)`, new Date().toISOString());
+  const list = await admin.get('/api/admin/outbox');
+  assert.equal(list.text.includes('hidden@attack.example'), false);
+  assert.ok(list.body.rows.some((r) => /address hidden/.test(r.error)));
 });
 
 // ---- 3. guessing --------------------------------------------------------------------

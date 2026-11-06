@@ -35,8 +35,9 @@ docker compose --env-file home.env exec --user "$(stat -c %u:%g ./data)" secret-
   gifts, tasks, notes, people sitting out and people on Do not disturb;
 * every email sign-in code is `SANTA_DEMO_OTP` (default `123456`), and the sign-in page lists
   every demo person so you can play as anyone with one click; `admin` / `admin` works too;
-* **no email ever leaves the app** - everything lands in Admin > Outbox, where you can read it.
-  (Admin > Email > "Send a test email" is the one exception, so you can try a relay.)
+* **no email ever leaves the app** - everything lands in Admin > Outbox, sealed like real game
+  emails; Admin > Email has a preview of each one. ("Send a test email" there is the one exception
+  that really sends, so you can try a relay.)
 * Admin > Overview has **Reset the demo**.
 
 Demo data lives in its own database file, `demo.sqlite`. With `SANTA_DEMO_MODE=false` the app
@@ -49,8 +50,12 @@ command again.
 | role | can |
 |---|---|
 | **player** | everyone who signs in. Sees the games they are part of on the home page, joins more with an invite link or code (or from "Open for sign-ups"), checks in, keeps a wishlist and hints, gives gifts, sets tasks, sends notes |
-| **organiser** | whoever **creates a game** owns it: dates, budget, players, locations, exclusions, the draw, reminders and the reveal. Organisers only ever see the games they organise |
-| **platform admin** | runs the platform, not the games: people and CSV import, locations, sign-in (SAML, Microsoft, email codes, who may sign up), email relay, guidelines, the audit log. The admin can list every game, hand one to another organiser, or delete one - but cannot open a game's draw |
+| **organiser** | whoever **creates a game** owns it: dates, budget, players, locations, exclusions, the draw, reminders and the reveal - and can open the **Santa list**, the only place all the pairs are shown (blurred until unsealed, and every look is in the audit log). Organisers only ever see the games they organise |
+| **platform admin** | runs the platform, not the games: people and CSV import, locations, sign-in (SAML, Microsoft, email codes, who may sign up), email relay, guidelines, the audit log. For a game the admin sees its name, organiser, status, dates and number of players, and can hand it to one of its players or delete it - nothing about who plays or who drew whom |
+
+**These are two separate roles.** An admin account cannot create, join, play in or open a game; a
+person who wants to do both uses two accounts (the seeded `admin` for the platform, their own
+for the games). Someone in a running game cannot be made an admin.
 
 **An organiser can play in their own game** - but since they run the draw, the app asks them to
 accept, once, that they will be able to see who their own Santa is. Their acceptance is
@@ -111,7 +116,7 @@ add its own house rules in its settings; they show on the game page.
    draws themselves, nobody simply swaps when there are three or more, and any size works.
    The home page shows each organiser the same warnings for every game they run.
 2. **Exclusions** - pairs who must not draw each other (partners, a manager and their report).
-3. **Draw names** - optionally emails every Santa their child. Late joiners can be **inserted**
+3. **Draw names** - optionally emails every Santa that they have been matched (the name stays in the app). Late joiners can be **inserted**
    into the circle afterwards (only one Santa's child changes); removing someone hands their
    child to their Santa so the circle stays whole.
 
@@ -172,13 +177,14 @@ What the app guarantees, each one checked by `test/attacks.test.js`:
   once the child has **said yes** to the game. Anyone can create a game and add anyone, so
   being added is not consent: joining by invite or sign-up, checking in, counting yourself in,
   or playing as the organiser is. The match email leaves the wishlist out until then too.
-* **The platform admin cannot learn the pairings.** Game emails are **sealed** in the outbox:
-  the admin sees who each email went to, its subject (which never names a child) and whether it
-  arrived, never its contents, and the body is deleted once sent (sign-in codes are stored
-  blanked). An admin account cannot be made organiser of a game; once names are drawn a game
-  can only be handed to someone who plays in it; and an admin cannot change the email or
-  password of anyone in a still-secret draw, by hand or by CSV. (Demo mode is the exception for
-  the outbox: demo people are made up, and the outbox is where demo emails go.)
+* **The platform admin cannot learn the pairings.** An admin account is refused every game
+  route. Game emails are **sealed** in the outbox, in demo mode too: the admin sees each one's
+  subject (which never names a child) and whether it arrived, never who received it - that alone
+  could give a pair away when someone is slotted in - or what it says, and the body is deleted
+  once sent (sign-in codes are stored blanked). An admin account cannot be made organiser of a
+  game; a game with players can only be handed to one of them; and an admin cannot change the
+  email or password of anyone in a still-secret draw, by hand or by CSV. Deleting a person
+  does not say who they were paired with.
 * **No harvesting.** The people search needs two letters, answers at most 25 people with masked
   addresses (`ho•••@example.com`), matches an email only when typed in full, and is rate
   limited. Organisers never see a full address or an employee ID; players see no addresses.
@@ -191,8 +197,9 @@ What the app guarantees, each one checked by `test/attacks.test.js`:
 * **No peeking.** On screen, the child's name is hidden like a password: dots and a
   **Hold to peek** button that shows it only while held (mouse, finger, or Space / Enter) and
   hides it on release, when the window loses focus or the tab is hidden. While hidden the name is
-  not in the page at all, so find-in-page and copy cannot reach it. Email subjects and inbox
-  previews never name the child either.
+  not in the page at all, so find-in-page and copy cannot reach it. **No email ever names a
+  Santa's child**: the match email says only that they have been matched, and the app shows who
+  (no name, location or wishlist in the match, start, reminder or note emails).
 
 What it cannot promise: whoever runs the **server** or controls **sign-in** (the platform admin
 can point SAML at an identity provider of their choosing) can always act as someone else. Keep

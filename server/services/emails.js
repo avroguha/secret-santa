@@ -108,40 +108,34 @@ function otp({ appTitle, name, code, minutes = 10, demo = false }) {
   };
 }
 
-function matched({ profileLink, appTitle, santaName, childName, childLocation, teamName, budget, startDate, endDate, wishlist = [], link }) {
-  const wishes = wishlist.slice(0, 5);
-  const wishHtml = wishes.length ? `
-    <p style="margin:16px 0 6px;font-weight:bold;">&#127873; A peek at their wishlist</p>
-    <ul style="margin:0 0 8px;padding-left:20px;">
-      ${wishes.map((w) => `<li style="margin:3px 0;">${w.url ? `<a href="${esc(w.url)}" style="color:#146b3a;">${esc(w.title)}</a>` : esc(w.title)}</li>`).join('')}
-    </ul>` : '<p style="margin:16px 0 0;">Their wishlist is still empty - a gentle nudge through the anonymous notes might help! &#128140;</p>';
+// An email to a Santa never says who their child is - not the name, not the
+// location, not the wishlist. Inboxes get read over shoulders, forwarded and
+// synced to phones; the app shows the name, and only while it is held down.
+function matched({ profileLink, appTitle, santaName, teamName, budget, startDate, endDate, link }) {
   return {
-    // Subject and preheader never name the child: they pop up in notifications
-    // and inbox lists where anyone nearby can read them.
-    subject: `Ho ho ho! Your Secret Santa match in ${teamName} is in 🎅`,
+    subject: `Ho ho ho! You've been matched in ${teamName} 🎅`,
     html: layout({
       profileLink,
       appTitle,
       emoji: '&#127877;',
       title: 'The names are drawn!',
-      preheader: `The names are drawn in ${teamName} - open this when nobody is peeking.`,
+      preheader: `The names are drawn in ${teamName} - your child is waiting in the app.`,
       body: `
-        <p style="margin:0 0 6px;">Dear ${esc(santaName)}, the elves have spoken &#129497;. In <b>${esc(teamName)}</b> you are the Secret Santa for&hellip;</p>
-        ${tag('Your child is', childName, childLocation ? `playing from ${childLocation}` : '')}
+        <p style="margin:0 0 6px;">Dear ${esc(santaName)}, the elves have spoken &#129497;. In <b>${esc(teamName)}</b> you have been matched with your child!</p>
+        ${tag('Your child has been chosen', 'Who could it be?', 'The name stays in the app, safe from peeking')}
         ${facts([['Game on', startDate ? `${fmtDate(startDate)} - ${fmtDate(endDate)}` : ''], ['Budget', budget]])}
-        ${wishHtml}
-        <p style="margin:16px 0 0;">Shh&hellip; &#129323; keep it under your Santa hat. You can log gifts, set fun tasks and send anonymous notes from the app.</p>`,
-      cta: { label: 'See your child', url: link },
+        <p style="margin:16px 0 0;">Open the app and press and hold <b>Hold to peek</b> to see who it is, when nobody is looking over your shoulder. Their wishlist and hints are there too.</p>
+        <p style="margin:12px 0 0;">Shh&hellip; &#129323; keep it under your Santa hat. You can log gifts, set fun tasks and send anonymous notes from the app.</p>`,
+      cta: { label: 'Open the game', url: link },
       footer: 'What happens at the North Pole stays at the North Pole.',
     }),
-    text: textOf([`Dear ${santaName},`, '', `In ${teamName} you are the Secret Santa for: ${childName}${childLocation ? ` (${childLocation})` : ''}`,
+    text: textOf([`Dear ${santaName},`, '', `In ${teamName} you have been matched with your child! The name stays in the app, safe from peeking: open it and hold "Hold to peek" to see who it is.`,
       startDate ? `Game on: ${fmtDate(startDate)} - ${fmtDate(endDate)}` : null, budget ? `Budget: ${budget}` : null,
-      wishes.length ? `\nTheir wishlist:\n${wishes.map((w) => `- ${w.title}${w.url ? ` ${w.url}` : ''}`).join('\n')}` : null,
       '', `Open the app: ${link}`, '', 'Keep it secret!']),
   };
 }
 
-function start({ profileLink, appTitle, name, teamName, endDate, childName, link }) {
+function start({ profileLink, appTitle, name, teamName, endDate, link }) {
   return {
     subject: `🎄 Let the games begin: ${teamName} starts today!`,
     html: layout({
@@ -152,14 +146,13 @@ function start({ profileLink, appTitle, name, teamName, endDate, childName, link
       preheader: `${teamName} starts today and runs until ${fmtDate(endDate)}.`,
       body: `
         <p style="margin:0 0 10px;">Jingle all the way, ${esc(name)}! <b>${esc(teamName)}</b> is officially ON. &#127881;</p>
-        ${childName ? tag('Remember, you are Santa for', childName, `until ${fmtDate(endDate)}`) : ''}
         <p style="margin:0 0 6px;">&#127873; Leave little surprises (and log them in the app)<br>
         &#129497; Set your child a fun task - everyone can see the task board<br>
         &#128140; Ask questions anonymously through Santa notes</p>`,
       cta: { label: 'Open the game', url: link },
     }),
     text: textOf([`Jingle all the way, ${name}!`, `${teamName} starts today and runs until ${fmtDate(endDate)}.`,
-      childName ? `You are Santa for: ${childName}` : null, '', `Open the game: ${link}`]),
+      '', `Open the game: ${link}`]),
   };
 }
 
@@ -203,15 +196,15 @@ function giftLogged({ profileLink, appTitle, childName, teamName, description, i
   };
 }
 
-function message({ profileLink, appTitle, toName, fromLabel, subjectFrom = fromLabel, teamName, body, link }) {
+function message({ profileLink, appTitle, toName, fromLabel, teamName, body, link }) {
   return {
-    subject: `💌 A note from ${subjectFrom}`,
+    subject: `💌 A note from ${fromLabel}`,
     html: layout({
       profileLink,
       appTitle,
       emoji: '&#128140;',
       title: 'You have a Santa note!',
-      preheader: `${subjectFrom} wrote to you in ${teamName}.`,
+      preheader: `${fromLabel} wrote to you in ${teamName}.`,
       body: `
         <p style="margin:0 0 6px;">Hi ${esc(toName)}, <b>${esc(fromLabel)}</b> sent you a note in <b>${esc(teamName)}</b>:</p>
         ${quote(body)}
@@ -283,7 +276,7 @@ function locationReminder({ appTitle, name, teamName, deadline, locationName, li
 }
 
 // Phase 2: a friendly jingle before the game ends. Never "you haven't...".
-function giftReminder({ appTitle, name, teamName, childName, endDate, daysLeft, giftsSoFar, link, profileLink }) {
+function giftReminder({ appTitle, name, teamName, endDate, daysLeft, giftsSoFar, link, profileLink }) {
   const when = daysLeft <= 0 ? 'today' : daysLeft === 1 ? 'tomorrow' : `in ${daysLeft} days`;
   return {
     subject: `🔔 A little jingle from ${teamName}`,
@@ -294,16 +287,15 @@ function giftReminder({ appTitle, name, teamName, childName, endDate, daysLeft, 
       preheader: `${teamName} wraps up ${when} - no stress, just a heads-up.`,
       body: `
         <p style="margin:0 0 6px;">Hi ${esc(name)}! &#127876; <b>${esc(teamName)}</b> wraps up ${when} (${esc(fmtDate(endDate))}).</p>
-        ${tag('Your child', childName)}
         ${giftsSoFar > 0
     ? '<p style="margin:0 0 6px;">Your little surprises have been a hit already. &#127881; If you are planning a final gift, the app is ready whenever you are.</p>'
-    : `<p style="margin:0 0 6px;">Whenever you're ready, ${esc(childName)} would love a little something - big or small, homemade or shop-bought, it's truly the thought that counts.</p>`}
+    : `<p style="margin:0 0 6px;">Whenever you're ready, your child would love a little something - big or small, homemade or shop-bought, it's truly the thought that counts.</p>`}
         <p style="margin:0;font-size:14px;color:#5b544a;">And if life has been busy, no stress at all - this is meant to be fun. &#128155;</p>`,
       cta: { label: 'Peek at their wishlist', url: link },
       profileLink,
     }),
-    text: textOf([`Hi ${name}! ${teamName} wraps up ${when} (${fmtDate(endDate)}).`, `Your child: ${childName}.`,
-      giftsSoFar > 0 ? 'Your surprises have been a hit already!' : `Whenever you're ready, ${childName} would love a little something.`,
+    text: textOf([`Hi ${name}! ${teamName} wraps up ${when} (${fmtDate(endDate)}).`, 
+      giftsSoFar > 0 ? 'Your surprises have been a hit already!' : "Whenever you're ready, your child would love a little something.",
       'No stress at all - this is meant to be fun.', '', link]),
   };
 }
@@ -331,15 +323,15 @@ const TEMPLATES = { otp, matched, start, taskAssigned, giftLogged, message, reve
 function sample(kind, { appTitle, link }) {
   const s = {
     otp: { name: 'Holly Berry', code: '482913' },
-    matched: { santaName: 'Holly Berry', childName: 'Jack Frost', childLocation: 'North Pole', teamName: 'Workshop Elves', budget: '$25', startDate: '2026-12-01', endDate: '2026-12-24', wishlist: [{ title: 'Fuzzy reindeer socks', url: 'https://www.example.com/socks' }, { title: 'A good mystery novel' }] },
-    start: { name: 'Holly Berry', teamName: 'Workshop Elves', endDate: '2026-12-24', childName: 'Jack Frost' },
+    matched: { santaName: 'Holly Berry', teamName: 'Workshop Elves', budget: '$25', startDate: '2026-12-01', endDate: '2026-12-24' },
+    start: { name: 'Holly Berry', teamName: 'Workshop Elves', endDate: '2026-12-24' },
     taskAssigned: { childName: 'Jack Frost', teamName: 'Workshop Elves', title: 'Wear a festive hat to the stand-up', details: 'Bonus points for jingle bells.', dueDate: '2026-12-12' },
     giftLogged: { childName: 'Jack Frost', teamName: 'Workshop Elves', description: 'A mug of hot cocoa on your desk', isFinal: false },
     message: { toName: 'Jack Frost', fromLabel: 'your Secret Santa', teamName: 'Workshop Elves', body: 'Quick question - tea or coffee person? ☕' },
     reveal: { name: 'Jack Frost', teamName: 'Workshop Elves', santaName: 'Holly Berry' },
     reminder: { name: 'Jack Frost', teamName: 'Workshop Elves', startDate: '2026-12-01', profileLink: `${link}/#/profile` },
     locationReminder: { name: 'Jack Frost', teamName: 'Workshop Elves', deadline: '2026-11-20', locationName: 'North Pole', profileLink: `${link}/#/profile` },
-    giftReminder: { name: 'Holly Berry', teamName: 'Workshop Elves', childName: 'Jack Frost', endDate: '2026-12-24', daysLeft: 3, giftsSoFar: 0, profileLink: `${link}/#/profile` },
+    giftReminder: { name: 'Holly Berry', teamName: 'Workshop Elves', endDate: '2026-12-24', daysLeft: 3, giftsSoFar: 0, profileLink: `${link}/#/profile` },
     test: {},
   }[kind];
   if (!s) return null;

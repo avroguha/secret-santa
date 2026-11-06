@@ -34,7 +34,7 @@ export async function overviewView(main, { isCurrent, session }) {
       <div class="stat"><div class="n">${c.queued}</div><div class="l">emails queued</div></div>
     </div>
     <div class="section-title"><h2>🎄 Games</h2><a href="#/admin/games">All games →</a></div>
-    ${o.teams.length ? html`<div class="table-wrap"><table class="table stack">
+    ${o.teams.length ? html`<div class="table-wrap"><table class="table table-cards">
       <thead><tr><th>Game</th><th>Organiser</th><th>Status</th><th>Dates</th><th class="num">Players</th></tr></thead>
       <tbody>${o.teams.slice(0, 8).map((t) => html`<tr>
         <td class="first"><b>${t.name}</b></td>
@@ -85,15 +85,14 @@ export async function usersView(main, { isCurrent, query, session }) {
       ${adminNav('/admin/users')}
       <form id="search" class="inline-form" style="margin-bottom:14px"><div class="field"><label class="sr-only" for="q">Search</label>
         <input id="q" name="q" type="search" value="${q}" placeholder="Search by name, email, ID or location"></div><button class="btn ghost" type="submit">Search</button></form>
-      <div class="table-wrap"><table class="table stack">
-        <thead><tr><th>Name</th><th>ID</th><th>Email</th><th>Location</th><th>Games</th><th>Last sign-in</th><th></th></tr></thead>
+      <div class="table-wrap"><table class="table table-cards">
+        <thead><tr><th>Name</th><th>ID</th><th>Email</th><th>Location</th><th>Last sign-in</th><th></th></tr></thead>
         <tbody>${users.map((u) => html`<tr>
           <td class="first"><div class="row" style="flex-wrap:nowrap">${avatar(u.name, { cls: 'tiny' })}<b>${u.name}</b>
             ${u.role === 'admin' ? html`<span class="badge gold">admin</span>` : ''} ${!u.active ? html`<span class="badge">inactive</span>` : ''} ${u.dnd ? html`<span class="badge" title="Do not disturb - no emails">🔕</span>` : ''}</div>
             ${u.displayName ? html`<div class="muted" style="font-size:.8rem">${u.username}</div>` : ''}</td>
           <td data-label="ID">${u.externalId || ''}</td><td data-label="Email">${u.email || html`<span class="muted">-</span>`}</td>
           <td data-label="Location">${u.locationName || html`<span class="badge warn">not set</span>`}</td>
-          <td data-label="Games" style="max-width:220px">${u.teams || html`<span class="muted">-</span>`}</td>
           <td data-label="Last sign-in" class="nowrap">${u.lastLoginAt ? ago(u.lastLoginAt) : html`<span class="muted">never</span>`}</td>
           <td class="nowrap"><button class="btn link small" data-act="edit" data-id="${u.id}">Edit</button>
             ${u.id !== session.user.id ? html`<button class="btn danger-link small" data-act="del" data-id="${u.id}">Delete</button>` : ''}</td></tr>`)}</tbody>
@@ -148,9 +147,8 @@ export async function usersView(main, { isCurrent, query, session }) {
     del: async (d) => {
       const u = users.find((x) => String(x.id) === d.id);
       if (!await confirmBox(`Delete ${u.name}?`, { ok: 'Delete', danger: true, detail: 'They are taken out of every team. In a team that has drawn names, their Santa takes over their child so the circle stays whole.' })) return;
-      const r = await api.del(`/api/admin/users/${d.id}`);
+      await api.del(`/api/admin/users/${d.id}`);
       toast(`${u.name} deleted`);
-      for (const n of r.notes || []) toast(n, 'error');
       reload();
     },
   });
@@ -288,7 +286,7 @@ export async function locationsView(main, { isCurrent }) {
 
 // ---- email relay -----------------------------------------------------------------------------------
 const PREVIEWS = [['otp', '🔑 Sign-in code'], ['locationReminder', '🌍 Check-in nudge'], ['matched', '🎅 Names drawn'], ['start', '🎄 Game starts'], ['taskAssigned', '🧝 New task'], ['giftLogged', '🎁 Gift logged'], ['message', '💌 Santa note'], ['giftReminder', '🔔 Gift jingle'], ['reminder', '✨ Wishlist nudge'], ['reveal', '🎉 Reveal'], ['test', '🔔 Test']];
-const NOTIFY = [['locationReminder', 'Gentle check-in reminders before check-in closes (phase 1)'], ['giftReminder', 'A friendly gift jingle before the game ends (phase 2)'], ['matched', 'Names drawn - each Santa learns their child'], ['start', 'The game starts today'], ['taskAssigned', 'A child gets a new fun task'], ['giftLogged', 'A child is told a gift is coming'], ['messages', 'Santa notes (both ways)'], ['reveal', 'The big reveal after the game']];
+const NOTIFY = [['locationReminder', 'Gentle check-in reminders before check-in closes (phase 1)'], ['giftReminder', 'A friendly gift jingle before the game ends (phase 2)'], ['matched', 'Names drawn - each Santa hears they are matched (the name stays in the app)'], ['start', 'The game starts today'], ['taskAssigned', 'A child gets a new fun task'], ['giftLogged', 'A child is told a gift is coming'], ['messages', 'Santa notes (both ways)'], ['reveal', 'The big reveal after the game']];
 
 export async function emailView(main, { isCurrent }) {
   const s = await api.get('/api/admin/settings');
@@ -297,7 +295,7 @@ export async function emailView(main, { isCurrent }) {
   mount(main, html`
     <div class="page-head"><div><h1>✉️ Email</h1><p class="sub">An open SMTP relay: no username or password is ever stored.</p></div></div>
     ${adminNav('/admin/email')}
-    ${s.demo ? html`<div class="alert gold"><span class="ico">🧪</span><div>Demo mode: game emails are kept in the <a href="#/admin/outbox">outbox</a> and never sent. "Send a test email" below does send for real, so you can try the relay.</div></div>` : ''}
+    ${s.demo ? html`<div class="alert gold"><span class="ico">🧪</span><div>Demo mode: game emails are kept in the <a href="#/admin/outbox">outbox</a> and never sent, sealed like real ones - the previews below show what each looks like. "Send a test email" below does send for real, so you can try the relay.</div></div>` : ''}
     <div class="grid two">
       <form id="relay" class="card" novalidate>
         <h2>📮 Mail relay</h2>
@@ -511,7 +509,7 @@ export async function outboxView(main, { isCurrent }) {
   if (!isCurrent()) return;
   const badge = { sent: 'ok', captured: 'gold', queued: 'blue', failed: 'error' };
   const draw = () => mount(main, html`
-    <div class="page-head"><div><h1>📮 Outbox</h1><p class="sub">Every email the app has written. ${o.sealed ? "Game emails are sealed - they can name who someone is Santa for - so only who, what and whether it arrived is shown." : "Demo mode: every email can be read here."} Sign-in codes are stored blanked out.</p></div>
+    <div class="page-head"><div><h1>📮 Outbox</h1><p class="sub">Every email the app has written, so you can see that mail is flowing. Game emails are sealed - no recipient, no contents - because they could give away who is whose Santa. The <a href="#/admin/email">Email</a> page has a preview of each one. Sign-in codes are stored blanked out.</p></div>
       <div class="row">${o.counts.failed ? html`<button class="btn gold" data-act="retry">↻ Retry ${plural(o.counts.failed, 'failed email')}</button>` : ''}
         <button class="btn ghost" data-act="clear">🧹 Clear the log</button></div></div>
     ${adminNav('/admin/outbox')}
@@ -522,10 +520,10 @@ export async function outboxView(main, { isCurrent }) {
     ${o.rows.length ? html`<div class="table-wrap"><table class="table">
       <thead><tr><th>When</th><th>To</th><th>Subject</th><th>Status</th><th></th></tr></thead>
       <tbody>${o.rows.map((r) => html`<tr>
-        <td class="nowrap">${fmtDateTime(r.createdAt)}</td><td>${r.toName ? html`${r.toName}<br>` : ''}<span class="muted">${r.to}</span></td>
+        <td class="nowrap">${fmtDateTime(r.createdAt)}</td><td>${r.sealed ? html`<span class="muted">🔒 sealed</span>` : html`${r.toName ? html`${r.toName}<br>` : ''}<span class="muted">${r.to}</span>`}</td>
         <td>${r.subject}${r.error ? html`<div class="muted" style="color:var(--error)">${r.error}</div>` : ''}</td>
         <td><span class="badge ${badge[r.status]}">${r.status === 'captured' ? 'demo' : r.status}</span></td>
-        <td>${r.sealed ? html`<span class="badge" title="Game emails are never shown to anyone but the person they were sent to">🔒 sealed</span>` : html`<button class="btn link small" data-act="view" data-id="${r.id}">View</button>`}</td></tr>`)}</tbody></table></div>`
+        <td>${r.sealed ? '' : html`<button class="btn link small" data-act="view" data-id="${r.id}">View</button>`}</td></tr>`)}</tbody></table></div>`
     : html`<div class="card empty"><span class="big-emoji">📭</span>No emails here.</div>`}`);
   draw();
   const reload = async () => { o = await api.get(`/api/admin/outbox${status ? `?status=${status}` : ''}`); draw(); };
@@ -593,16 +591,16 @@ export async function gamesView(main, { isCurrent }) {
   let games = await api.get('/api/admin/games');
   if (!isCurrent()) return;
   const draw = () => mount(main, html`
-    <div class="page-head"><div><h1>🎄 Games</h1><p class="sub">${plural(games.length, 'game')} on the platform. Organisers run their own games; here you can only hand one over or delete it.</p></div></div>
+    <div class="page-head"><div><h1>🎄 Games</h1><p class="sub">${plural(games.length, 'game')} on the platform. Each one belongs to its organiser, who alone can see who plays and who drew whom; here you can only hand one over or delete it.</p></div></div>
     ${adminNav('/admin/games')}
-    ${games.length ? html`<div class="table-wrap"><table class="table stack">
+    ${games.length ? html`<div class="table-wrap"><table class="table table-cards">
       <thead><tr><th>Game</th><th>Organiser</th><th>Status</th><th>Dates</th><th class="num">Players</th><th>Created</th><th></th></tr></thead>
       <tbody>${games.map((g) => html`<tr>
         <td class="first"><b>${g.name}</b> ${g.joinOpen ? html`<span class="badge blue">open sign-up</span>` : ''}</td>
         <td data-label="Organiser">${g.owner ? html`${g.owner.name}<div class="muted" style="font-size:.8rem">${g.owner.email || ''}</div>` : html`<span class="badge warn">nobody - hand it over</span>`}</td>
         <td data-label="Status">${phaseBadge(g.phase)}</td>
         <td data-label="Dates" class="nowrap">${fmtShort(g.startDate)} - ${fmtShort(g.endDate)}</td>
-        <td data-label="Players" class="num">${g.memberCount}${g.sittingOut ? html` <span class="muted">+${g.sittingOut} out</span>` : ''}</td>
+        <td data-label="Players" class="num">${g.memberCount}</td>
         <td data-label="Created" class="nowrap">${fmtDateTime(g.createdAt)}</td>
         <td class="nowrap"><button class="btn link small" data-act="owner" data-id="${g.id}">Change organiser</button>
           <button class="btn danger-link small" data-act="delete" data-id="${g.id}">Delete</button></td></tr>`)}</tbody></table></div>`
@@ -616,7 +614,7 @@ export async function gamesView(main, { isCurrent }) {
       const ok = await formModal({
         title: `🎄 New organiser for ${g.name}`,
         submit: 'Hand it over',
-        body: html`<p class="muted">The new organiser runs the game from their home page. If they also play in it, they'll be asked to accept that they can see the Santa list. Admin accounts can't organise games, and once names are drawn the game can only go to someone who plays in it.</p>
+        body: html`<p class="muted">The new organiser runs the game from their home page. If they also play in it, they'll be asked to accept that they can see the Santa list. Admin accounts can't organise games, and a game with players can only go to one of them.</p>
           <div class="field"><label for="no">New organiser</label><select id="no" name="userId">${people.map((u) => html`<option value="${u.id}" ${g.owner && g.owner.id === u.id ? 'selected' : ''}>${u.name}${u.email ? ` (${u.email})` : ''}</option>`)}</select></div>`,
         onSubmit: (v) => api.put(`/api/admin/games/${g.id}/owner`, { userId: v.userId }),
       });

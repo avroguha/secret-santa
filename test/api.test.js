@@ -23,6 +23,7 @@ const CSV = [
 let env;
 let smtp;
 let admin;
+let organiser;
 
 async function signInWithCode(email) {
   const c = await env.client().init();
@@ -95,35 +96,38 @@ let teamId;
 const ids = {};
 
 test('team, players and the location balance', async () => {
+  // The admin runs the platform; a game is run by whoever creates it.
+  assert.equal((await admin.post('/api/admin/users', { username: 'Olive Organiser', externalId: 'E99', email: 'olive@example.com' })).status, 200);
+  organiser = await signInWithCode('olive@example.com');
   const users = (await admin.get('/api/admin/users')).body;
   for (const u of users) ids[u.username] = u.id;
-  const t = await admin.post('/api/manage/teams', {
+  const t = await organiser.post('/api/manage/teams', {
     name: 'Workshop Elves', startDate: addDays(today(), -1), endDate: addDays(today(), 10), budget: '$25', minGroupSize: 3,
   });
   assert.equal(t.status, 200, t.text);
   teamId = t.body.id;
-  const players = Object.entries(ids).filter(([n]) => n !== 'admin').map(([, v]) => v);
-  const add = await admin.post(`/api/manage/teams/${teamId}/members`, { userIds: players });
+  const players = Object.entries(ids).filter(([n]) => n !== 'admin' && n !== 'Olive Organiser').map(([, v]) => v);
+  const add = await organiser.post(`/api/manage/teams/${teamId}/members`, { userIds: players });
   assert.equal(add.body.added, 8);
   const pools = Object.fromEntries(add.body.detail.pools.map((p) => [p.label, p]));
   assert.equal(pools['Snowglobe City'].level, 'error', 'a location of one is highlighted');
   assert.equal(pools['North Pole'].level, 'ok');
-  const blocked = await admin.post(`/api/manage/teams/${teamId}/draw`, {});
+  const blocked = await organiser.post(`/api/manage/teams/${teamId}/draw`, {});
   assert.equal(blocked.status, 409, 'cannot draw with a one-person location');
   const locs = (await admin.get('/api/locations')).body;
   const gb = locs.find((l) => l.name === 'Gingerbread Town').id;
-  const merged = await admin.post(`/api/manage/teams/${teamId}/pools/merge`, { fromPool: pools['Snowglobe City'].key, intoLocationId: gb });
+  const merged = await organiser.post(`/api/manage/teams/${teamId}/pools/merge`, { fromPool: pools['Snowglobe City'].key, intoLocationId: gb });
   assert.equal(merged.status, 200, merged.text);
   assert.ok(merged.body.pools.every((p) => p.level === 'ok'));
 });
 
 test('exclusions and the draw: valid within each pool, Santas emailed', async () => {
-  await admin.post(`/api/manage/teams/${teamId}/exclusions`, { a: ids['Holly Berry'], b: ids['Jack Frost'] });
+  await organiser.post(`/api/manage/teams/${teamId}/exclusions`, { a: ids['Holly Berry'], b: ids['Jack Frost'] });
   const before = smtp.messages.length;
-  const d = await admin.post(`/api/manage/teams/${teamId}/draw`, { notify: true });
+  const d = await organiser.post(`/api/manage/teams/${teamId}/draw`, { notify: true });
   assert.equal(d.status, 200, d.text);
   assert.equal(d.body.mailed, 8);
-  const m = (await admin.get(`/api/manage/teams/${teamId}/matches`)).body;
+  const m = (await organiser.get(`/api/manage/teams/${teamId}/matches`)).body;
   const pairs = m.map((x) => ({ santa: x.santaId, child: x.childId }));
   const np = ['Holly Berry', 'Jack Frost', 'Noelle Winters', 'Nick Kringle'].map((n) => ids[n]);
   const gb = ['Carol Singer', 'Buddy Elfson', 'Ginger Snap', 'Comet Starling'].map((n) => ids[n]);
@@ -131,10 +135,11 @@ test('exclusions and the draw: valid within each pool, Santas emailed', async ()
   assert.ok(isValidDraw(np, pairs.filter((p) => np.includes(p.santa)), isEx));
   assert.ok(isValidDraw(gb, pairs.filter((p) => gb.includes(p.santa))));
   await waitFor(() => smtp.messages.length >= before + 8, { timeout: 8000 });
-  assert.ok(smtp.messages.slice(before).some((x) => x.data.includes('Secret Santa for')));
+  // The email says they are matched and leaves the name to the app.
+  assert.ok(smtp.messages.slice(before).some((x) => x.data.replace(/=\r\n/g, '').includes('matched with your child')));
   const audit = (await admin.get('/api/admin/audit')).body;
   assert.ok(audit.some((a) => a.action === 'looked at the full Santa list'));
-  const again = await admin.post(`/api/manage/teams/${teamId}/draw`, {});
+  const again = await organiser.post(`/api/manage/teams/${teamId}/draw`, {});
   assert.equal(again.status, 409, 'a redraw needs confirming');
 });
 
@@ -232,16 +237,16 @@ test('fun tasks are public on the board - without the Santa', async () => {
   const thx = await child.post(`/api/teams/${teamId}/gifts/${gifts[0].id}/received`, { thanks: 'Thank you!' });
   assert.ok(thx.body.fromSanta.gifts[0].receivedAt);
   // the reveal
-  await admin.post(`/api/manage/teams/${teamId}/reveal`, { revealed: true });
+  await organiser.post(`/api/manage/teams/${teamId}/reveal`, { revealed: true });
   const after = (await child.get(`/api/teams/${teamId}`)).body;
   assert.equal(after.fromSanta.santaName, 'Holly Berry');
 });
 
 test('outside the dates, gifts and tasks are closed', async () => {
-  const t = await admin.post('/api/manage/teams', { name: 'Next Year', startDate: addDays(today(), 30), endDate: addDays(today(), 40) });
+  const t = await organiser.post('/api/manage/teams', { name: 'Next Year', startDate: addDays(today(), 30), endDate: addDays(today(), 40) });
   const id = t.body.id;
-  await admin.post(`/api/manage/teams/${id}/members`, { userIds: [ids['Holly Berry'], ids['Jack Frost'], ids['Noelle Winters']] });
-  await admin.post(`/api/manage/teams/${id}/draw`, {});
+  await organiser.post(`/api/manage/teams/${id}/members`, { userIds: [ids['Holly Berry'], ids['Jack Frost'], ids['Noelle Winters']] });
+  await organiser.post(`/api/manage/teams/${id}/draw`, {});
   const r = await holly.post(`/api/teams/${id}/gifts`, { description: 'Too early' });
   assert.equal(r.status, 409);
   assert.match(r.body.error, /opens on/);
@@ -251,25 +256,25 @@ test('late joiner goes into the circle; a dropout closes it again', async () => 
   const add = await admin.post('/api/admin/users', { username: 'Late Larry', externalId: 'E9', email: 'larry@example.com', locationId: (await admin.get('/api/locations')).body.find((l) => l.name === 'North Pole').id });
   assert.equal(add.status, 200, add.text);
   const larry = add.body.id;
-  let d = (await admin.post(`/api/manage/teams/${teamId}/members`, { userIds: [larry] })).body.detail;
+  let d = (await organiser.post(`/api/manage/teams/${teamId}/members`, { userIds: [larry] })).body.detail;
   assert.deepEqual(d.unmatched, [larry]);
-  d = (await admin.post(`/api/manage/teams/${teamId}/members/${larry}/insert`, { notify: false })).body;
+  d = (await organiser.post(`/api/manage/teams/${teamId}/members/${larry}/insert`, { notify: false })).body;
   assert.equal(d.unmatched.length, 0);
-  const all = (await admin.get(`/api/manage/teams/${teamId}`)).body.members.map((m) => m.id);
-  let pairs = (await admin.get(`/api/manage/teams/${teamId}/matches`)).body.map((x) => ({ santa: x.santaId, child: x.childId }));
+  const all = (await organiser.get(`/api/manage/teams/${teamId}`)).body.members.map((m) => m.id);
+  let pairs = (await organiser.get(`/api/manage/teams/${teamId}/matches`)).body.map((x) => ({ santa: x.santaId, child: x.childId }));
   assert.ok(isValidDraw(all, pairs));
   // remove someone mid-game: still a valid draw over everyone left
   const gone = ids['Nick Kringle'];
-  const r = await admin.del(`/api/manage/teams/${teamId}/members/${gone}`);
+  const r = await organiser.del(`/api/manage/teams/${teamId}/members/${gone}`);
   assert.equal(r.status, 200, r.text);
   const left = r.body.detail.members.map((m) => m.id);
-  pairs = (await admin.get(`/api/manage/teams/${teamId}/matches`)).body.map((x) => ({ santa: x.santaId, child: x.childId }));
+  pairs = (await organiser.get(`/api/manage/teams/${teamId}/matches`)).body.map((x) => ({ santa: x.santaId, child: x.childId }));
   assert.ok(isValidDraw(left, pairs));
   // deleting a person keeps every circle whole too
   const del = await admin.del(`/api/admin/users/${ids['Buddy Elfson']}`);
   assert.equal(del.status, 200);
-  const left2 = (await admin.get(`/api/manage/teams/${teamId}`)).body.members.map((m) => m.id);
-  pairs = (await admin.get(`/api/manage/teams/${teamId}/matches`)).body.map((x) => ({ santa: x.santaId, child: x.childId }));
+  const left2 = (await organiser.get(`/api/manage/teams/${teamId}`)).body.members.map((m) => m.id);
+  pairs = (await organiser.get(`/api/manage/teams/${teamId}/matches`)).body.map((x) => ({ santa: x.santaId, child: x.childId }));
   assert.ok(isValidDraw(left2, pairs));
 });
 

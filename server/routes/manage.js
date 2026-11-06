@@ -98,7 +98,8 @@ module.exports = function manageRoutes(router, app) {
     // Copy members (and optionally exclusions) from an earlier team.
     if (copyFrom) {
       db.run(`INSERT INTO team_members (team_id, user_id, location_id, pool_location_id, joined_at)
-              SELECT ?, user_id, location_id, pool_location_id, ? FROM team_members WHERE team_id = ?`, teamId, at, copyFrom);
+              SELECT ?, tm.user_id, tm.location_id, tm.pool_location_id, ? FROM team_members tm JOIN users u ON u.id = tm.user_id
+               WHERE tm.team_id = ? AND u.role <> 'admin'`, teamId, at, copyFrom);
       db.run('INSERT INTO exclusions (team_id, user_a, user_b, created_at) SELECT ?, user_a, user_b, ? FROM exclusions WHERE team_id = ?', teamId, at, copyFrom);
       // "Don't give to the same person as last time": exclude last draw's pairs.
       if (bool(ctx.body.avoidPrevious)) {
@@ -218,14 +219,14 @@ module.exports = function manageRoutes(router, app) {
     const locs = [].concat(ctx.body.allFromLocations || [], ctx.body.allFromLocation || []).slice(0, 50).map((x) => id(x, 'Location'));
     for (const loc of locs) {
       // a bulk add never adds the organiser - they join on purpose, below
-      ids = ids.concat(db.all('SELECT id FROM users WHERE location_id = ? AND active = 1 AND email IS NOT NULL AND id <> ?', loc, ctx.user.id).map((r) => r.id));
+      ids = ids.concat(db.all("SELECT id FROM users WHERE location_id = ? AND active = 1 AND email IS NOT NULL AND id <> ? AND role <> 'admin'", loc, ctx.user.id).map((r) => r.id));
     }
     if (ids.includes(ctx.user.id)) ownerAck(ctx, team);
     const at = nowIso();
     let added = 0;
     db.tx(() => {
       for (const uid of new Set(ids)) {
-        if (!db.get('SELECT 1 FROM users WHERE id = ? AND active = 1', uid)) continue;
+        if (!db.get("SELECT 1 FROM users WHERE id = ? AND active = 1 AND role <> 'admin'", uid)) continue; // admin accounts are not in games
         added += db.run('INSERT OR IGNORE INTO team_members (team_id, user_id, joined_at) VALUES (?, ?, ?)', team.id, uid, at).changes;
         if (uid === ctx.user.id) T.sayYes(db, team.id, uid);
       }
@@ -454,7 +455,7 @@ module.exports = function manageRoutes(router, app) {
     const q = String(ctx.query.q || '').trim().replace(/[%_\\]/g, '').slice(0, 80);
     if (q.length < 2) return [];
     const args = [`%${q}%`, `%${q}%`, `%${q}%`, normEmail(q)];
-    let where = `u.active = 1 AND u.email IS NOT NULL
+    let where = `u.active = 1 AND u.email IS NOT NULL AND u.role <> 'admin'
       AND (u.username LIKE ? OR u.display_name LIKE ? OR l.name LIKE ? OR u.email = ?)`;
     if (ctx.query.notInTeam) {
       // Only your own game: anyone else's would tell you who plays in it.

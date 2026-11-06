@@ -12,16 +12,16 @@ const { nowIso } = require('../lib/util');
 
 const MAX_ATTEMPTS = 3;
 
-// Game emails are SEALED with real data: they can name a Santa's child (the
-// match, the start, gift reminders, notes from a child) or carry private
-// notes, and the platform admin must not be able to read who is whose Santa.
-// The outbox keeps who, what kind, the subject (which never names a child) and
-// the delivery status; the body is kept only until it is sent, and the admin
-// can never open it. Sign-in codes are stored with the code blanked, and the
-// admin's own relay test is not a game email. Demo data is made up, so the
-// demo outbox stays readable - it is the only place demo emails go.
+// Game emails are SEALED, in demo mode too: they can name a Santa's child (the
+// match, the start, gift reminders, notes from a child) or carry private notes,
+// and who received which one at what moment can give a pair away (a Santa who
+// gets a new match email just as someone is slotted in). So the platform admin
+// sees only that an email exists: its subject (which never names a child), kind
+// and delivery status - never the recipient or the contents. The body is kept
+// only until it is sent. Sign-in codes are stored with the code blanked, and the
+// admin's own relay test is not a game email.
 const OPEN_KINDS = new Set(['test', 'otp']);
-const isSealed = (kind, demo) => !demo && !OPEN_KINDS.has(kind);
+const isSealed = (kind) => !OPEN_KINDS.has(kind);
 
 class Mailer {
   constructor(app) {
@@ -124,7 +124,7 @@ class Mailer {
         try {
           await this.sendNow({ to: row.to_email, toName: row.to_name, subject: row.subject, html: row.html, text: row.text });
           this.app.db.run("UPDATE outbox SET status = 'sent', attempts = attempts + 1, error = '', sent_at = ? WHERE id = ?", nowIso(), row.id);
-          if (isSealed(row.kind, false)) this.app.db.run("UPDATE outbox SET html = '', text = '' WHERE id = ?", row.id);
+          if (isSealed(row.kind)) this.app.db.run("UPDATE outbox SET html = '', text = '' WHERE id = ?", row.id);
         } catch (err) {
           const attempts = row.attempts + 1;
           this.app.db.run(

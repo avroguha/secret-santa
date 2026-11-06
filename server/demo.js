@@ -83,7 +83,7 @@ function seed(app, { reset = false } = {}) {
     PEOPLE.forEach(([name, l, hints], i) => {
       uid[name] = db.run(`INSERT INTO users (external_id, username, email, location_id, role, hints, source, created_at, updated_at)
                           VALUES (?, ?, ?, ?, ?, ?, 'csv', ?, ?)`,
-      `E${1001 + i}`, name, email(name), l ? loc[l] : null, name === 'Noelle Winters' ? 'admin' : 'user', JSON.stringify(hints), at, at).lastInsertRowid;
+      `E${1001 + i}`, name, email(name), l ? loc[l] : null, 'user', JSON.stringify(hints), at, at).lastInsertRowid;
       const n = 2 + (i % 3);
       for (let w = 0; w < n; w += 1) {
         const [title, url, notes, priority] = pick(WISHES, i * 3 + w);
